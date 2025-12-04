@@ -246,7 +246,7 @@ async function testSpecificPattern() {
     test_pattern: testPattern,
   };
 
-  const outputPath = './output/test-pattern-3-3-7-7.json';
+  const outputPath = './output/test-pattern-0-1-4-5.json';
   const outputDir = path.dirname(outputPath);
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });

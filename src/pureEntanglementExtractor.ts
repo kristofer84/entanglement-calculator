@@ -3,12 +3,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // Type definitions
-type Point = [number, number]; // [row, col]
+export type Point = [number, number]; // [row, col]
 type StarPair = [Point, Point];
-type Transform = (row: number, col: number) => Point;
+export type Transform = (row: number, col: number) => Point;
 
 // D4 symmetry group transforms (8 transforms)
-const transforms: Transform[] = [
+export const transforms: Transform[] = [
   // f0: identity
   (r, c) => [r, c],
   // f1: reflect across vertical axis
@@ -27,7 +27,7 @@ const transforms: Transform[] = [
   (r, c) => [-c, -r],
 ];
 
-interface CanonicalizationResult {
+export interface CanonicalizationResult {
   canonicalStars: StarPair;
   transformIndex: number;
   translation: Point; // [min_row, min_col]
@@ -53,7 +53,7 @@ interface PureEntanglementOutput {
 /**
  * Canonicalize a star pair using D4 symmetry
  */
-function canonicalizeStars(initialStars: Point[]): CanonicalizationResult {
+export function canonicalizeStars(initialStars: Point[]): CanonicalizationResult {
   if (initialStars.length !== 2) {
     throw new Error('canonicalizeStars expects exactly 2 stars');
   }
@@ -110,7 +110,7 @@ function canonicalizeStars(initialStars: Point[]): CanonicalizationResult {
 /**
  * Canonicalize forced-empty cells using the same transform and translation
  */
-function canonicalizeEmpties(
+export function canonicalizeEmpties(
   forcedEmpty: Point[],
   transformIndex: number,
   translation: Point
@@ -145,6 +145,11 @@ export function extractPureEntanglements(
   for (const pattern of output.patterns) {
     // Convert initial_stars from Cell[] to Point[]
     const initialStars: Point[] = pattern.initial_stars.map(cell => [cell.row, cell.col]);
+    
+    // Skip patterns that don't have exactly 2 stars (canonicalization requires pairs)
+    if (initialStars.length !== 2) {
+      continue;
+    }
     
     // Convert forced_empty from Cell[] to Point[]
     const forcedEmpty: Point[] = pattern.forced_empty.map(cell => [cell.row, cell.col]);

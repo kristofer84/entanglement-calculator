@@ -5,7 +5,10 @@ import { calculateIterations, formatNumber, promptConfirmation, writeOutput } fr
 import { Output } from './types';
 import { Worker } from 'worker_threads';
 import * as os from 'os';
+import * as fs from 'fs';
 import { extractPureEntanglements, writePureEntanglementOutput } from './pureEntanglementExtractor';
+import { mineConstrainedEntanglements, writeConstrainedEntanglementOutput } from './constrainedEntanglementMiner';
+import { mineTripleEntanglements, writeTripleEntanglementOutput } from './tripleEntanglementMiner';
 
 // Parse command line arguments manually to handle --key=value format
 function parseArgs(): { gridSize: number; starsPerLine: number; entangledStars: number; output: string; includeInherent: boolean; includeCompatibleSolutions: boolean } {
@@ -243,6 +246,37 @@ async function main() {
           console.log(`Pure entanglement output written to ${pureOutputPath}`);
           console.log('');
           
+          // Step 5: Mine constrained entanglements
+          console.log('Step 5: Mining constrained entanglements...');
+          const constrainedEntanglements = mineConstrainedEntanglements(output, 2);
+          const constrainedOutputPath = normalizedOutputPath.replace(/\.json$/, '-constrained-entanglements.json');
+          writeConstrainedEntanglementOutput(constrainedEntanglements, constrainedOutputPath);
+          console.log(`Found ${formatNumber(constrainedEntanglements.unconstrained_rules.length)} unconstrained rules`);
+          console.log(`Found ${formatNumber(constrainedEntanglements.constrained_rules.length)} constrained rules`);
+          console.log(`Total unconstrained occurrences: ${formatNumber(constrainedEntanglements.unconstrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
+          console.log(`Total constrained occurrences: ${formatNumber(constrainedEntanglements.constrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
+          console.log(`Constrained entanglement output written to ${constrainedOutputPath}`);
+          console.log('');
+          
+          // Step 6: Mine triple entanglements
+          console.log('Step 6: Mining triple entanglements...');
+          const tripleEntanglements = mineTripleEntanglements(output, solutions, 2);
+          const tripleOutputPath = normalizedOutputPath.replace(/\.json$/, '-triple-entanglements.json');
+          writeTripleEntanglementOutput(tripleEntanglements, tripleOutputPath);
+          console.log(`Found ${formatNumber(tripleEntanglements.unconstrained_rules.length)} unconstrained triple rules`);
+          console.log(`Found ${formatNumber(tripleEntanglements.constrained_rules.length)} constrained triple rules`);
+          console.log(`Total unconstrained occurrences: ${formatNumber(tripleEntanglements.unconstrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
+          console.log(`Total constrained occurrences: ${formatNumber(tripleEntanglements.constrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
+          console.log(`Triple entanglement output written to ${tripleOutputPath}`);
+          console.log('');
+          
+          // Save solutions to file (needed for future triple entanglement mining runs)
+          const solutionsPath = normalizedOutputPath.replace(/\.json$/, '-solutions.json');
+          console.log(`Saving solutions to ${solutionsPath}...`);
+          fs.writeFileSync(solutionsPath, JSON.stringify(solutions), 'utf-8');
+          console.log('Done!');
+          console.log('');
+          
           // Cleanup
           clearInterval(progressInterval);
           workers.forEach(w => w.terminate());
@@ -264,4 +298,3 @@ main().catch((error) => {
   console.error('Error:', error);
   process.exit(1);
 });
-
