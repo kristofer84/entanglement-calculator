@@ -5,6 +5,7 @@ import { calculateIterations, formatNumber, promptConfirmation, writeOutput } fr
 import { Output } from './types';
 import { Worker } from 'worker_threads';
 import * as os from 'os';
+import { extractPureEntanglements, writePureEntanglementOutput } from './pureEntanglementExtractor';
 
 // Parse command line arguments manually to handle --key=value format
 function parseArgs(): { gridSize: number; starsPerLine: number; entangledStars: number; output: string; includeInherent: boolean; includeCompatibleSolutions: boolean } {
@@ -230,6 +231,17 @@ async function main() {
           console.log(`Writing results to ${normalizedOutputPath}...`);
           writeOutput(output, normalizedOutputPath, includeCompatibleSolutions);
           console.log('Done!');
+          console.log('');
+          
+          // Step 4: Extract pure entanglement geometries
+          console.log('Step 4: Extracting pure entanglement geometries...');
+          const pureEntanglements = extractPureEntanglements(output, 2);
+          const pureOutputPath = normalizedOutputPath.replace(/\.json$/, '-pure-entanglements.json');
+          writePureEntanglementOutput(pureEntanglements, pureOutputPath);
+          console.log(`Found ${formatNumber(pureEntanglements.pure_entanglement_templates.length)} pure entanglement templates`);
+          console.log(`Total occurrences: ${formatNumber(pureEntanglements.pure_entanglement_templates.reduce((sum, t) => sum + t.occurrences, 0))}`);
+          console.log(`Pure entanglement output written to ${pureOutputPath}`);
+          console.log('');
           
           // Cleanup
           clearInterval(progressInterval);
