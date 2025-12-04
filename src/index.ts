@@ -237,45 +237,63 @@ async function main() {
           console.log('');
           
           // Step 4: Extract pure entanglement geometries
-          console.log('Step 4: Extracting pure entanglement geometries...');
-          const pureEntanglements = extractPureEntanglements(output, 2);
-          const pureOutputPath = normalizedOutputPath.replace(/\.json$/, '-pure-entanglements.json');
-          writePureEntanglementOutput(pureEntanglements, pureOutputPath);
-          console.log(`Found ${formatNumber(pureEntanglements.pure_entanglement_templates.length)} pure entanglement templates`);
-          console.log(`Total occurrences: ${formatNumber(pureEntanglements.pure_entanglement_templates.reduce((sum, t) => sum + t.occurrences, 0))}`);
-          console.log(`Pure entanglement output written to ${pureOutputPath}`);
-          console.log('');
-          
-          // Step 5: Mine constrained entanglements
-          console.log('Step 5: Mining constrained entanglements...');
-          const constrainedEntanglements = mineConstrainedEntanglements(output, 2);
-          const constrainedOutputPath = normalizedOutputPath.replace(/\.json$/, '-constrained-entanglements.json');
-          writeConstrainedEntanglementOutput(constrainedEntanglements, constrainedOutputPath);
-          console.log(`Found ${formatNumber(constrainedEntanglements.unconstrained_rules.length)} unconstrained rules`);
-          console.log(`Found ${formatNumber(constrainedEntanglements.constrained_rules.length)} constrained rules`);
-          console.log(`Total unconstrained occurrences: ${formatNumber(constrainedEntanglements.unconstrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
-          console.log(`Total constrained occurrences: ${formatNumber(constrainedEntanglements.constrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
-          console.log(`Constrained entanglement output written to ${constrainedOutputPath}`);
-          console.log('');
-          
-          // Step 6: Mine triple entanglements
-          console.log('Step 6: Mining triple entanglements...');
-          const tripleEntanglements = mineTripleEntanglements(output, solutions, 2);
-          const tripleOutputPath = normalizedOutputPath.replace(/\.json$/, '-triple-entanglements.json');
-          writeTripleEntanglementOutput(tripleEntanglements, tripleOutputPath);
-          console.log(`Found ${formatNumber(tripleEntanglements.unconstrained_rules.length)} unconstrained triple rules`);
-          console.log(`Found ${formatNumber(tripleEntanglements.constrained_rules.length)} constrained triple rules`);
-          console.log(`Total unconstrained occurrences: ${formatNumber(tripleEntanglements.unconstrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
-          console.log(`Total constrained occurrences: ${formatNumber(tripleEntanglements.constrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
-          console.log(`Triple entanglement output written to ${tripleOutputPath}`);
-          console.log('');
-          
-          // Save solutions to file (needed for future triple entanglement mining runs)
-          const solutionsPath = normalizedOutputPath.replace(/\.json$/, '-solutions.json');
-          console.log(`Saving solutions to ${solutionsPath}...`);
-          fs.writeFileSync(solutionsPath, JSON.stringify(solutions), 'utf-8');
-          console.log('Done!');
-          console.log('');
+          // Note: Only supported for 2-star patterns (D4 symmetry canonicalization requires pairs)
+          if (entangledStars === 2) {
+            console.log('Step 4: Extracting pure entanglement geometries...');
+            const pureEntanglements = extractPureEntanglements(output, 2);
+            // Fix Bug 2: Handle paths that don't end with .json
+            const pureOutputPath = normalizedOutputPath.endsWith('.json')
+              ? normalizedOutputPath.replace(/\.json$/, '-pure-entanglements.json')
+              : normalizedOutputPath + '-pure-entanglements.json';
+            writePureEntanglementOutput(pureEntanglements, pureOutputPath);
+            console.log(`Found ${formatNumber(pureEntanglements.pure_entanglement_templates.length)} pure entanglement templates`);
+            console.log(`Total occurrences: ${formatNumber(pureEntanglements.pure_entanglement_templates.reduce((sum, t) => sum + t.occurrences, 0))}`);
+            console.log(`Pure entanglement output written to ${pureOutputPath}`);
+            console.log('');
+            
+            // Step 5: Mine constrained entanglements
+            console.log('Step 5: Mining constrained entanglements...');
+            const constrainedEntanglements = mineConstrainedEntanglements(output, 2);
+            // Fix Bug 2: Handle paths that don't end with .json
+            const constrainedOutputPath = normalizedOutputPath.endsWith('.json')
+              ? normalizedOutputPath.replace(/\.json$/, '-constrained-entanglements.json')
+              : normalizedOutputPath + '-constrained-entanglements.json';
+            writeConstrainedEntanglementOutput(constrainedEntanglements, constrainedOutputPath);
+            console.log(`Found ${formatNumber(constrainedEntanglements.unconstrained_rules.length)} unconstrained rules`);
+            console.log(`Found ${formatNumber(constrainedEntanglements.constrained_rules.length)} constrained rules`);
+            console.log(`Total unconstrained occurrences: ${formatNumber(constrainedEntanglements.unconstrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
+            console.log(`Total constrained occurrences: ${formatNumber(constrainedEntanglements.constrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
+            console.log(`Constrained entanglement output written to ${constrainedOutputPath}`);
+            console.log('');
+            
+            // Step 6: Mine triple entanglements
+            console.log('Step 6: Mining triple entanglements...');
+            const tripleEntanglements = mineTripleEntanglements(output, solutions, 2);
+            // Fix Bug 2: Handle paths that don't end with .json
+            const tripleOutputPath = normalizedOutputPath.endsWith('.json')
+              ? normalizedOutputPath.replace(/\.json$/, '-triple-entanglements.json')
+              : normalizedOutputPath + '-triple-entanglements.json';
+            writeTripleEntanglementOutput(tripleEntanglements, tripleOutputPath);
+            console.log(`Found ${formatNumber(tripleEntanglements.unconstrained_rules.length)} unconstrained triple rules`);
+            console.log(`Found ${formatNumber(tripleEntanglements.constrained_rules.length)} constrained triple rules`);
+            console.log(`Total unconstrained occurrences: ${formatNumber(tripleEntanglements.unconstrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
+            console.log(`Total constrained occurrences: ${formatNumber(tripleEntanglements.constrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
+            console.log(`Triple entanglement output written to ${tripleOutputPath}`);
+            console.log('');
+            
+            // Save solutions to file (needed for future triple entanglement mining runs)
+            // Fix Bug 2: Handle paths that don't end with .json
+            const solutionsPath = normalizedOutputPath.endsWith('.json')
+              ? normalizedOutputPath.replace(/\.json$/, '-solutions.json')
+              : normalizedOutputPath + '-solutions.json';
+            console.log(`Saving solutions to ${solutionsPath}...`);
+            fs.writeFileSync(solutionsPath, JSON.stringify(solutions), 'utf-8');
+            console.log('Done!');
+            console.log('');
+          } else {
+            console.log(`Step 4: Skipping entanglement extraction (only supported for 2-star patterns, got ${entangledStars})`);
+            console.log('');
+          }
           
           // Cleanup
           clearInterval(progressInterval);
