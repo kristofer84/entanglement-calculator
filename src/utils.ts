@@ -66,8 +66,40 @@ export function ensureOutputDir(outputPath: string): void {
 /**
  * Write output to JSON file
  */
-export function writeOutput(output: Output, outputPath: string): void {
+export function writeOutput(output: Output, outputPath: string, includeCompatibleSolutions: boolean = false): void {
   ensureOutputDir(outputPath);
-  fs.writeFileSync(outputPath, JSON.stringify(output, null, 2), 'utf-8');
+  
+  // Transform cell objects to compressed [row, col] arrays and omit empty arrays
+  const compressedOutput = {
+    ...output,
+    patterns: output.patterns.map(pattern => {
+      const compressedPattern: any = {
+        initial_stars: pattern.initial_stars.map(cell => [cell.row, cell.col]),
+      };
+      
+      // Only include compatible_solutions if requested
+      if (includeCompatibleSolutions) {
+        compressedPattern.compatible_solutions = pattern.compatible_solutions;
+      }
+      
+      // Only include forced_empty if it's not empty
+      if (pattern.forced_empty.length > 0) {
+        compressedPattern.forced_empty = pattern.forced_empty.map(cell => [cell.row, cell.col]);
+      }
+      
+      // Only include forced_star if it's not empty
+      if (pattern.forced_star.length > 0) {
+        compressedPattern.forced_star = pattern.forced_star.map(cell => [cell.row, cell.col]);
+      }
+      
+      return compressedPattern;
+    }),
+  };
+  const jsonString = JSON.stringify(compressedOutput)
+  // const minifiedJsonString = jsonString.replace(/\[(?:[^\[\]]|\[(?:[^\[\]]|\[[^\[\]]*\])*\])*\]/g, m =>
+  //   m.replace(/\s+/g, '').replace(/,\]/g, ']')
+  // );
+  
+  fs.writeFileSync(outputPath, jsonString, 'utf-8');
 }
 

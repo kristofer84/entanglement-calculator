@@ -217,18 +217,33 @@ async function testSpecificPattern() {
   console.log('');
 
   // Step 7: Save results to JSON
+  const includeCompatibleSolutions = false; // Set to true to include compatible_solutions in test output
+  const testPattern: any = {
+    initial_stars: pattern.map(cell => [cell.row, cell.col]),
+  };
+  
+  // Only include compatible_solutions if requested
+  if (includeCompatibleSolutions) {
+    testPattern.compatible_solutions = result.compatible_solutions;
+  }
+  
+  // Only include forced_empty if it's not empty
+  if (result.forced_empty.length > 0) {
+    testPattern.forced_empty = result.forced_empty.map(cell => [cell.row, cell.col]);
+  }
+  
+  // Only include forced_star if it's not empty
+  if (result.forced_star.length > 0) {
+    testPattern.forced_star = result.forced_star.map(cell => [cell.row, cell.col]);
+  }
+  
   const output = {
     board_size: gridSize,
     stars_per_row: starsPerLine,
     stars_per_column: starsPerLine,
     initial_star_count: patternSize,
     total_solutions: totalSolutions,
-    test_pattern: {
-      initial_stars: pattern,
-      compatible_solutions: result.compatible_solutions,
-      forced_empty: result.forced_empty,
-      forced_star: result.forced_star,
-    }
+    test_pattern: testPattern,
   };
 
   const outputPath = './output/test-pattern-3-3-7-7.json';

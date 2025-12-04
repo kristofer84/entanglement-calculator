@@ -7,7 +7,7 @@ import { Worker } from 'worker_threads';
 import * as os from 'os';
 
 // Parse command line arguments manually to handle --key=value format
-function parseArgs(): { gridSize: number; starsPerLine: number; entangledStars: number; output: string; includeInherent: boolean } {
+function parseArgs(): { gridSize: number; starsPerLine: number; entangledStars: number; output: string; includeInherent: boolean; includeCompatibleSolutions: boolean } {
   const args = process.argv.slice(2);
   const result: any = {
     gridSize: 10,
@@ -15,6 +15,7 @@ function parseArgs(): { gridSize: number; starsPerLine: number; entangledStars: 
     entangledStars: 2,
     output: './output/result.json',
     includeInherent: false,
+    includeCompatibleSolutions: false,
   };
 
   for (const arg of args) {
@@ -32,6 +33,10 @@ function parseArgs(): { gridSize: number; starsPerLine: number; entangledStars: 
         // Accept --includeInherent or --includeInherent=true
         // If no value or value is 'true', set to true; otherwise false
         result.includeInherent = value === undefined || value === '' || value === 'true';
+      } else if (key === 'includeCompatibleSolutions') {
+        // Accept --includeCompatibleSolutions or --includeCompatibleSolutions=true
+        // If no value or value is 'true', set to true; otherwise false
+        result.includeCompatibleSolutions = value === undefined || value === '' || value === 'true';
       }
     }
   }
@@ -45,6 +50,7 @@ const starsPerLine = args.starsPerLine;
 const entangledStars = args.entangledStars;
 const outputPath = args.output;
 const includeInherent = args.includeInherent;
+const includeCompatibleSolutions = args.includeCompatibleSolutions;
 
 // Normalize output path (remove leading ./ if present)
 const normalizedOutputPath = outputPath.startsWith('./') 
@@ -59,6 +65,7 @@ async function main() {
   console.log(`Initial Star Count: ${entangledStars}`);
   console.log(`Output: ${normalizedOutputPath}`);
   console.log(`Include Inherent Forced Empty: ${includeInherent}`);
+  console.log(`Include Compatible Solutions: ${includeCompatibleSolutions}`);
   console.log('');
 
   // Calculate iterations
@@ -221,7 +228,7 @@ async function main() {
 
           // Write output
           console.log(`Writing results to ${normalizedOutputPath}...`);
-          writeOutput(output, normalizedOutputPath);
+          writeOutput(output, normalizedOutputPath, includeCompatibleSolutions);
           console.log('Done!');
           
           // Cleanup
