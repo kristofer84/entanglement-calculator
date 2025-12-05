@@ -294,7 +294,7 @@ function isSolutionCompatible(grid: GridSolution, stars: Point[]): boolean {
  * Enumerate all locally valid star pairs without any filtering.
  * This ensures we see all possible star pair placements, not just "interesting" ones.
  */
-function enumerateAllStarPairs(boardSize: number): Cell[][] {
+export function enumerateAllStarPairs(boardSize: number): Cell[][] {
   const pairs: Cell[][] = [];
 
   for (let r1 = 0; r1 < boardSize; r1++) {
