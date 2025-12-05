@@ -274,8 +274,8 @@ async function main() {
           writeTripleEntanglementOutput(tripleEntanglements, tripleOutputPath);
           console.log(`Found ${formatNumber(tripleEntanglements.unconstrained_rules.length)} unconstrained triple rules`);
           console.log(`Found ${formatNumber(tripleEntanglements.constrained_rules.length)} constrained triple rules`);
-          console.log(`Total unconstrained occurrences: ${formatNumber(tripleEntanglements.unconstrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
-          console.log(`Total constrained occurrences: ${formatNumber(tripleEntanglements.constrained_rules.reduce((sum, r) => sum + r.occurrences, 0))}`);
+          console.log(`Total unconstrained occurrences: ${formatNumber(tripleEntanglements.unconstrained_rules.reduce((sum: number, r) => sum + r.occurrences, 0))}`);
+          console.log(`Total constrained occurrences: ${formatNumber(tripleEntanglements.constrained_rules.reduce((sum: number, r) => sum + r.occurrences, 0))}`);
           console.log(`Triple entanglement output written to ${tripleOutputPath}`);
           console.log('');
           

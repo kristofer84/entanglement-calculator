@@ -1,44 +1,33 @@
-import { Pattern, Output, Cell, Grid } from './types';
-import { canonicalize, transforms, Point } from './pureEntanglementExtractor';
-import { ConfigurationEnumerator } from './enumeration';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Output } from './types';
 
-// Type definitions
-interface TripleOccurrence {
-  canonical_stars: Point[];
-  canonical_candidate: Point;
-  abs_stars: Point[];
-  abs_candidate: Point;
-  is_forced: boolean; // true if forced empty, false if flexible
-  extra_features: TripleFeatureSet;
+type Point = [number, number];
+
+interface Pattern {
+  initial_stars: Point[];
+  compatible_solutions?: number;
+  forced_empty?: Point[];
+  forced_star?: Point[];
 }
 
-interface TripleFeatureSet {
-  // Star-based features (work for any Z)
-  anyStarOnTopEdge: boolean;
-  anyStarOnBottomEdge: boolean;
-  anyStarOnLeftEdge: boolean;
-  anyStarOnRightEdge: boolean;
-  allStarsInLeftHalf: boolean;
-  allStarsInRightHalf: boolean;
-  allStarsInTopHalf: boolean;
-  allStarsInBottomHalf: boolean;
-  min_row_is_0: boolean;
-  max_row_is_board_size_minus_1: boolean;
-  min_col_is_0: boolean;
-  max_col_is_board_size_minus_1: boolean;
-  
-  // Candidate cell features
-  candidate_on_top_edge: boolean;
-  candidate_on_bottom_edge: boolean;
-  candidate_on_left_edge: boolean;
-  candidate_on_right_edge: boolean;
-  candidate_on_outer_ring: boolean; // on any edge
-  candidate_in_top_left_3x3: boolean;
-  candidate_in_top_right_3x3: boolean;
-  candidate_in_bottom_left_3x3: boolean;
-  candidate_in_bottom_right_3x3: boolean;
+interface EntanglementInput {
+  board_size: number;
+  stars_per_row: number;
+  stars_per_column: number;
+  initial_star_count: number;
+  total_solutions: number;
+  patterns: Pattern[];
+}
+
+type GridSolution = number[][]; // board_size x board_size, 1 = star, 0 = empty
+type CoordSolution = Point[];   // list of star coordinates
+
+interface SolutionsFile {
+  board_size: number;
+  stars_per_row: number;
+  stars_per_column: number;
+  solutions: (GridSolution | CoordSolution)[];
 }
 
 interface TripleRule {
@@ -49,485 +38,541 @@ interface TripleRule {
   occurrences: number;
 }
 
-interface TripleEntanglementOutput {
+interface TripleOutput {
   board_size: number;
   initial_stars: number;
   unconstrained_rules: TripleRule[];
   constrained_rules: TripleRule[];
 }
 
-/**
- * Canonicalize a triple (Z stars + candidate cell) using D4 symmetry
- * Works with any number of stars
- */
-function canonicalizeTriple(
-  stars: Point[],
-  candidate: Point
-): { canonicalStars: Point[]; canonicalCandidate: Point; transformIndex: number; translation: Point } {
-  if (stars.length === 0) {
-    throw new Error('canonicalizeTriple expects at least one star');
-  }
+// ----------------- Canonicalisation (D4 + translation) -----------------
 
-  // Use the generic canonicalize function, treating candidate as a cell
-  const result = canonicalize(stars, [candidate]);
-  
-  // Extract candidate from canonicalCells (should be single element)
-  if (result.canonicalCells.length !== 1) {
-    throw new Error('Expected exactly one candidate cell after canonicalization');
-  }
+const D4_TRANSFORMS: ((p: Point) => Point)[] = [
+  ([r, c]) => [ r,  c],  // identity
+  ([r, c]) => [ r, -c],  // reflect vertical
+  ([r, c]) => [-r,  c],  // reflect horizontal
+  ([r, c]) => [-r, -c],  // rotate 180
+  ([r, c]) => [ c,  r],  // transpose
+  ([r, c]) => [ c, -r],
+  ([r, c]) => [-c,  r],
+  ([r, c]) => [-c, -r],
+];
 
-  return {
-    canonicalStars: result.canonicalStars,
-    canonicalCandidate: result.canonicalCells[0],
-    transformIndex: result.transformIndex,
-    translation: result.translation,
-  };
+interface CanonicalTriple {
+  canonicalStars: Point[];
+  canonicalCandidate: Point;
 }
 
-/**
- * Extract features from a triple occurrence (works for any Z stars)
- */
-function extractTripleFeatures(
-  occurrence: TripleOccurrence,
-  boardSize: number
-): TripleFeatureSet {
-  const stars = occurrence.abs_stars;
-  const [c_row, c_col] = occurrence.abs_candidate;
-  
-  if (stars.length === 0) {
-    throw new Error('extractTripleFeatures expects at least one star');
-  }
-  
-  const minRow = Math.min(...stars.map(([r]) => r));
-  const maxRow = Math.max(...stars.map(([r]) => r));
-  const minCol = Math.min(...stars.map(([, c]) => c));
-  const maxCol = Math.max(...stars.map(([, c]) => c));
-  
-  const halfSize = Math.floor(boardSize / 2);
-  
-  // Aggregate star features
-  const anyStarOnTopEdge = stars.some(([r]) => r === 0);
-  const anyStarOnBottomEdge = stars.some(([r]) => r === boardSize - 1);
-  const anyStarOnLeftEdge = stars.some(([, c]) => c === 0);
-  const anyStarOnRightEdge = stars.some(([, c]) => c === boardSize - 1);
-  
-  const allStarsInTopHalf = stars.every(([r]) => r < halfSize);
-  const allStarsInBottomHalf = stars.every(([r]) => r >= halfSize);
-  const allStarsInLeftHalf = stars.every(([, c]) => c < halfSize);
-  const allStarsInRightHalf = stars.every(([, c]) => c >= halfSize);
-  
-  return {
-    // Star-based features (work for any Z)
-    anyStarOnTopEdge,
-    anyStarOnBottomEdge,
-    anyStarOnLeftEdge,
-    anyStarOnRightEdge,
-    allStarsInLeftHalf,
-    allStarsInRightHalf,
-    allStarsInTopHalf,
-    allStarsInBottomHalf,
-    min_row_is_0: minRow === 0,
-    max_row_is_board_size_minus_1: maxRow === boardSize - 1,
-    min_col_is_0: minCol === 0,
-    max_col_is_board_size_minus_1: maxCol === boardSize - 1,
-    
-    // Candidate cell features
-    candidate_on_top_edge: c_row === 0,
-    candidate_on_bottom_edge: c_row === boardSize - 1,
-    candidate_on_left_edge: c_col === 0,
-    candidate_on_right_edge: c_col === boardSize - 1,
-    candidate_on_outer_ring: c_row === 0 || c_row === boardSize - 1 || c_col === 0 || c_col === boardSize - 1,
-    candidate_in_top_left_3x3: c_row >= 0 && c_row <= 2 && c_col >= 0 && c_col <= 2,
-    candidate_in_top_right_3x3: c_row >= 0 && c_row <= 2 && c_col >= boardSize - 3 && c_col <= boardSize - 1,
-    candidate_in_bottom_left_3x3: c_row >= boardSize - 3 && c_row <= boardSize - 1 && c_col >= 0 && c_col <= 2,
-    candidate_in_bottom_right_3x3: c_row >= boardSize - 3 && c_row <= boardSize - 1 && c_col >= boardSize - 3 && c_col <= boardSize - 1,
-  };
-}
+function canonicalizeTriple(stars: Point[], candidate: Point): CanonicalTriple {
+  let bestStars: Point[] | null = null;
+  let bestCandidate: Point = [0, 0];
 
-/**
- * Get all feature names from TripleFeatureSet
- */
-function getTripleFeatureNames(): string[] {
-  return [
-    'anyStarOnTopEdge',
-    'anyStarOnBottomEdge',
-    'anyStarOnLeftEdge',
-    'anyStarOnRightEdge',
-    'allStarsInLeftHalf',
-    'allStarsInRightHalf',
-    'allStarsInTopHalf',
-    'allStarsInBottomHalf',
-    'min_row_is_0',
-    'max_row_is_board_size_minus_1',
-    'min_col_is_0',
-    'max_col_is_board_size_minus_1',
-    'candidate_on_top_edge',
-    'candidate_on_bottom_edge',
-    'candidate_on_left_edge',
-    'candidate_on_right_edge',
-    'candidate_on_outer_ring',
-    'candidate_in_top_left_3x3',
-    'candidate_in_top_right_3x3',
-    'candidate_in_bottom_left_3x3',
-    'candidate_in_bottom_right_3x3',
-  ];
-}
+  for (let t = 0; t < D4_TRANSFORMS.length; t++) {
+    const tf = D4_TRANSFORMS[t];
 
-/**
- * Get feature value from occurrence
- */
-function getTripleFeatureValue(occurrence: TripleOccurrence, featureName: string): boolean {
-  return (occurrence.extra_features as any)[featureName] || false;
-}
+    const sT = stars.map(tf);
+    const cT = tf(candidate);
 
-/**
- * Check if a candidate cell is forced empty for a given star pattern
- */
-function isCandidateForcedEmpty(
-  stars: Cell[],
-  candidate: Cell,
-  solutions: Grid[]
-): boolean {
-  // Find compatible solutions
-  const compatibleSolutions = solutions.filter(solution =>
-    ConfigurationEnumerator.isPatternCompatible(stars, solution)
-  );
-  
-  if (compatibleSolutions.length === 0) {
-    return false; // Pattern not realizable
-  }
-  
-  // Check if candidate is empty in all compatible solutions
-  return compatibleSolutions.every(solution =>
-    solution[candidate.row][candidate.col] === 0
-  );
-}
+    const minRow = Math.min(...sT.map(p => p[0]));
+    const minCol = Math.min(...sT.map(p => p[1]));
 
-/**
- * Mine triple entanglements from patterns
- */
-export function mineTripleEntanglements(
-  output: Output,
-  solutions: Grid[],
-  minOccurrences: number = 2
-): TripleEntanglementOutput {
-  const tripleOccurrences: TripleOccurrence[] = [];
-  
-  // Step 1: Process all patterns and build triples
-  for (const pattern of output.patterns) {
-    // Skip patterns with no stars
-    if (pattern.initial_stars.length === 0) {
-      continue;
-    }
-    
-    // Convert initial_stars from Cell[] to Point[]
-    const initialStars: Point[] = pattern.initial_stars.map(cell => [cell.row, cell.col]);
-    
-    // For each forced_empty cell, create a triple
-    for (const emptyCell of pattern.forced_empty) {
-      const candidate: Point = [emptyCell.row, emptyCell.col];
-      
-      // Canonicalize triple
-      const { canonicalStars, canonicalCandidate } = canonicalizeTriple(initialStars, candidate);
-      
-      // Check if candidate is forced empty (should be true since it's in forced_empty)
-      const isForced = isCandidateForcedEmpty(pattern.initial_stars, emptyCell, solutions);
-      
-      // Create occurrence record
-      const occurrence: TripleOccurrence = {
-        canonical_stars: canonicalStars,
-        canonical_candidate: canonicalCandidate,
-        abs_stars: initialStars,
-        abs_candidate: candidate,
-        is_forced: isForced,
-        extra_features: {} as TripleFeatureSet, // Will be filled below
-      };
-      
-      // Extract features
-      occurrence.extra_features = extractTripleFeatures(occurrence, output.board_size);
-      
-      tripleOccurrences.push(occurrence);
-    }
-  }
-  
-  // Step 2: Also check all possible placements of canonical triples
-  // For each canonical triple discovered from patterns, find all placements on the board
-  const canonicalTriples = new Map<string, { stars: Point[]; candidate: Point }>();
-  const seenPlacements = new Set<string>(); // Track seen (canonical_triple, abs_stars, abs_candidate) to avoid duplicates
-  
-  for (const occ of tripleOccurrences) {
-    const key = JSON.stringify([occ.canonical_stars, occ.canonical_candidate]);
-    if (!canonicalTriples.has(key)) {
-      canonicalTriples.set(key, {
-        stars: occ.canonical_stars,
-        candidate: occ.canonical_candidate,
-      });
-    }
-    // Mark this placement as seen
-    const placementKey = JSON.stringify([key, occ.abs_stars, occ.abs_candidate]);
-    seenPlacements.add(placementKey);
-  }
-  
-  // For each canonical triple, try all placements
-  for (const [tripleKey, triple] of canonicalTriples.entries()) {
-    const [canonStars, canonCandidate] = JSON.parse(tripleKey);
-    const [c0_row, c0_col] = canonCandidate;
-    
-    // Try all translations that fit on the board
-    for (let baseRow = 0; baseRow < output.board_size; baseRow++) {
-      for (let baseCol = 0; baseCol < output.board_size; baseCol++) {
-        // Calculate absolute positions for all stars
-        const absStars: Point[] = canonStars.map((star: Point) => [baseRow + star[0], baseCol + star[1]]);
-        const absCandidate: Point = [baseRow + c0_row, baseCol + c0_col];
-        
-        // Check bounds for all stars and candidate
-        let outOfBounds = false;
-        for (const star of absStars) {
-          if (star[0] < 0 || star[0] >= output.board_size ||
-              star[1] < 0 || star[1] >= output.board_size) {
-            outOfBounds = true;
-            break;
-          }
-        }
-        if (outOfBounds || 
-            absCandidate[0] < 0 || absCandidate[0] >= output.board_size ||
-            absCandidate[1] < 0 || absCandidate[1] >= output.board_size) {
-          continue;
-        }
-        
-        // Check adjacency (stars can't be adjacent to each other)
-        let hasAdjacentStars = false;
-        for (let i = 0; i < absStars.length; i++) {
-          for (let j = i + 1; j < absStars.length; j++) {
-            const rowDiff = Math.abs(absStars[i][0] - absStars[j][0]);
-            const colDiff = Math.abs(absStars[i][1] - absStars[j][1]);
-            if (rowDiff <= 1 && colDiff <= 1) {
-              hasAdjacentStars = true;
-              break;
-            }
-          }
-          if (hasAdjacentStars) break;
-        }
-        if (hasAdjacentStars) {
-          continue; // Stars are adjacent, invalid
-        }
-        
-        // Convert to Cell format
-        const starCells: Cell[] = absStars.map(([r, c]) => ({ row: r, col: c }));
-        const candidateCell: Cell = { row: absCandidate[0], col: absCandidate[1] };
-        
-        // Check if this pattern is compatible with any solution
-        const hasCompatibleSolution = solutions.some(solution =>
-          ConfigurationEnumerator.isPatternCompatible(starCells, solution)
-        );
-        
-        if (!hasCompatibleSolution) {
-          continue; // Pattern not realizable
-        }
-        
-        // Check if we've already seen this placement
-        const placementKey = JSON.stringify([tripleKey, absStars, absCandidate]);
-        if (seenPlacements.has(placementKey)) {
-          continue; // Already processed from patterns
-        }
-        seenPlacements.add(placementKey);
-        
-        // Check if candidate is forced empty
-        const isForced = isCandidateForcedEmpty(starCells, candidateCell, solutions);
-        
-        // Create occurrence
-        const occurrence: TripleOccurrence = {
-          canonical_stars: canonStars,
-          canonical_candidate: canonCandidate,
-          abs_stars: absStars,
-          abs_candidate: absCandidate,
-          is_forced: isForced,
-          extra_features: {} as TripleFeatureSet,
-        };
-        
-        // Extract features
-        occurrence.extra_features = extractTripleFeatures(occurrence, output.board_size);
-        
-        tripleOccurrences.push(occurrence);
-      }
-    }
-  }
-  
-  // Step 3: Group occurrences by canonical triple
-  const tripleGroups = new Map<string, TripleOccurrence[]>();
-  
-  for (const occ of tripleOccurrences) {
-    const key = JSON.stringify([occ.canonical_stars, occ.canonical_candidate]);
-    if (!tripleGroups.has(key)) {
-      tripleGroups.set(key, []);
-    }
-    tripleGroups.get(key)!.push(occ);
-  }
-  
-  // Step 4: Mine constraints
-  const unconstrainedRules: TripleRule[] = [];
-  const constrainedRules: TripleRule[] = [];
-  const featureNames = getTripleFeatureNames();
-  
-  for (const [tripleKey, occurrences] of tripleGroups.entries()) {
-    const [canonStars, canonCandidate] = JSON.parse(tripleKey);
-    
-    // Separate forced and flexible occurrences
-    const posOccs = occurrences.filter(occ => occ.is_forced);
-    const negOccs = occurrences.filter(occ => !occ.is_forced);
-    
-    if (posOccs.length < minOccurrences) {
-      continue;
-    }
-    
-    if (negOccs.length === 0) {
-      // Only forced occurrences - unconstrained rule
-      unconstrainedRules.push({
-        canonical_stars: canonStars,
-        canonical_candidate: canonCandidate,
-        constraint_features: [],
-        forced: true,
-        occurrences: posOccs.length,
-      });
+    const shift = (p: Point): Point => [p[0] - minRow, p[1] - minCol];
+
+    const sN = sT.map(shift).sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+    const cN = shift(cT);
+
+    if (!bestStars) {
+      bestStars = sN;
+      bestCandidate = cN;
     } else {
-      // Both forced and flexible - try to find constraints
-      // Try single-feature constraints
-      const singleFeatureConstraints: string[] = [];
-      for (const featureName of featureNames) {
-        // Check if all positive examples have this feature true
-        const allPosHaveFeature = posOccs.every(occ => getTripleFeatureValue(occ, featureName));
-        
-        if (allPosHaveFeature) {
-          // Check if NO negative example has this feature true
-          const noNegHasFeature = !negOccs.some(occ => getTripleFeatureValue(occ, featureName));
-          
-          if (noNegHasFeature) {
-            singleFeatureConstraints.push(featureName);
-          }
-        }
-      }
-      
-      // Try two-feature conjunctions if single features don't work
-      let bestConstraints: string[] = singleFeatureConstraints;
-      
-      if (singleFeatureConstraints.length === 0) {
-        // Try pairs of features
-        for (let i = 0; i < featureNames.length; i++) {
-          for (let j = i + 1; j < featureNames.length; j++) {
-            const f1 = featureNames[i];
-            const f2 = featureNames[j];
-            
-            // Check if all positive examples have both features true
-            const allPosHaveBoth = posOccs.every(occ => 
-              getTripleFeatureValue(occ, f1) && getTripleFeatureValue(occ, f2)
-            );
-            
-            if (allPosHaveBoth) {
-              // Check if no negative example has both features true
-              const noNegHasBoth = !negOccs.some(occ => 
-                getTripleFeatureValue(occ, f1) && getTripleFeatureValue(occ, f2)
-              );
-              
-              if (noNegHasBoth) {
-                // Found a separating pair
-                if (bestConstraints.length === 0 || bestConstraints.length > 2) {
-                  bestConstraints = [f1, f2];
-                }
-              }
-            }
-          }
-        }
-      } else {
-        // Use the first single feature constraint (simplest)
-        bestConstraints = [singleFeatureConstraints[0]];
-      }
-      
-      if (bestConstraints.length > 0) {
-        constrainedRules.push({
-          canonical_stars: canonStars,
-          canonical_candidate: canonCandidate,
-          constraint_features: bestConstraints,
-          forced: true,
-          occurrences: posOccs.length,
-        });
+      const current = JSON.stringify(sN);
+      const best = JSON.stringify(bestStars);
+      if (current < best) {
+        bestStars = sN;
+        bestCandidate = cN;
       }
     }
   }
-  
-  // Sort rules
-  const sortRules = (rules: TripleRule[]) => {
-    rules.sort((a, b) => {
-      if (b.occurrences !== a.occurrences) {
-        return b.occurrences - a.occurrences;
-      }
-      const aKey = JSON.stringify([a.canonical_stars, a.canonical_candidate]);
-      const bKey = JSON.stringify([b.canonical_stars, b.canonical_candidate]);
-      return aKey.localeCompare(bKey);
-    });
-  };
-  
-  sortRules(unconstrainedRules);
-  sortRules(constrainedRules);
-  
+
   return {
-    board_size: output.board_size,
-    initial_stars: output.initial_star_count,
-    unconstrained_rules: unconstrainedRules,
-    constrained_rules: constrainedRules,
+    canonicalStars: bestStars!,
+    canonicalCandidate: bestCandidate,
   };
 }
 
-/**
- * Write triple entanglement output to JSON file
- */
-export function writeTripleEntanglementOutput(
-  output: TripleEntanglementOutput,
-  outputPath: string
-): void {
-  // Ensure output directory exists
-  const dir = path.dirname(outputPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+// ----------------- Feature extraction for constrained rules -----------------
+
+interface TripleFeatures {
+  candidate_on_top_edge: boolean;
+  candidate_on_bottom_edge: boolean;
+  candidate_on_left_edge: boolean;
+  candidate_on_right_edge: boolean;
+  candidate_on_outer_ring: boolean; // distance 1 from edge
+  some_star_on_top_edge: boolean;
+  some_star_on_bottom_edge: boolean;
+  some_star_on_left_edge: boolean;
+  some_star_on_right_edge: boolean;
+}
+
+function extractFeatures(starsAbs: Point[], candidateAbs: Point, boardSize: number): TripleFeatures {
+  const [r, c] = candidateAbs;
+  const last = boardSize - 1;
+
+  const candidate_on_top_edge = r === 0;
+  const candidate_on_bottom_edge = r === last;
+  const candidate_on_left_edge = c === 0;
+  const candidate_on_right_edge = c === last;
+
+  // “Ring” one cell in from the edge, similar to the Kris guide: distance 1 from any side
+  const candidate_on_outer_ring =
+    r === 1 || r === last - 1 || c === 1 || c === last - 1;
+
+  const some_star_on_top_edge = starsAbs.some(([sr]) => sr === 0);
+  const some_star_on_bottom_edge = starsAbs.some(([sr]) => sr === last);
+  const some_star_on_left_edge = starsAbs.some(([, sc]) => sc === 0);
+  const some_star_on_right_edge = starsAbs.some(([, sc]) => sc === last);
+
+  return {
+    candidate_on_top_edge,
+    candidate_on_bottom_edge,
+    candidate_on_left_edge,
+    candidate_on_right_edge,
+    candidate_on_outer_ring,
+    some_star_on_top_edge,
+    some_star_on_bottom_edge,
+    some_star_on_left_edge,
+    some_star_on_right_edge,
+  };
+}
+
+// ----------------- Utilities -----------------
+
+function keyOfPoint([r, c]: Point): string {
+  return `${r},${c}`;
+}
+
+function parseSolutions(input: SolutionsFile | GridSolution[], boardSize: number): GridSolution[] {
+  // Handle both formats: array directly or object with solutions property
+  const solutions = Array.isArray(input) ? input : input.solutions;
+  
+  if (!solutions) {
+    throw new Error('Solutions file must contain a solutions array or be an array directly');
   }
   
-  const jsonString = JSON.stringify(output, null, 2);
-  fs.writeFileSync(outputPath, jsonString, 'utf-8');
+  return solutions.map(sol => {
+    const first = sol[0] as any;
+
+    // Grid form: board_size x board_size of 0/1
+    if (Array.isArray(first) && typeof first[0] === 'number' &&
+        (sol as any).length === boardSize &&
+        (sol as any)[0].length === boardSize) {
+      return sol as GridSolution;
+    }
+
+    // Coordinate form: list of [row, col]
+    if (Array.isArray(first) && first.length === 2) {
+      const grid: GridSolution = Array.from({ length: boardSize }, () =>
+        Array(boardSize).fill(0),
+      );
+      (sol as CoordSolution).forEach(([r, c]) => {
+        grid[r][c] = 1;
+      });
+      return grid;
+    }
+
+    throw new Error('Unsupported solutions format');
+  });
 }
 
-/**
- * Load output from JSON file and mine triple entanglements
- */
+function isSolutionCompatible(grid: GridSolution, stars: Point[]): boolean {
+  return stars.every(([r, c]) => grid[r][c] === 1);
+}
+
+// ----------------- Main mining logic -----------------
+
+interface TripleOccurrence {
+  canonicalStars: Point[];
+  canonicalCandidate: Point;
+  forced: boolean;
+  features: TripleFeatures;
+}
+
+interface TripleBucket {
+  canonicalStars: Point[];
+  canonicalCandidate: Point;
+  occurrences: TripleOccurrence[];
+}
+
 export function mineTripleFromFile(
   inputPath: string,
   solutionsPath: string,
   outputPath: string,
-  minOccurrences: number = 2
+  minOccurrences: number,
 ): void {
-  const jsonContent = fs.readFileSync(inputPath, 'utf-8');
-  const output: Output = JSON.parse(jsonContent);
-  
-  // Convert compressed format back to Pattern format
-  const patterns: Pattern[] = output.patterns.map((p: any) => ({
-    initial_stars: p.initial_stars.map(([row, col]: number[]) => ({ row, col })),
-    compatible_solutions: p.compatible_solutions || 0,
-    forced_empty: (p.forced_empty || []).map(([row, col]: number[]) => ({ row, col })),
-    forced_star: (p.forced_star || []).map(([row, col]: number[]) => ({ row, col })),
-  }));
-  
-  const fullOutput: Output = {
-    ...output,
-    patterns,
+  const rawEnt = fs.readFileSync(inputPath, 'utf-8');
+  const entData: EntanglementInput = JSON.parse(rawEnt);
+
+  const rawSol = fs.readFileSync(solutionsPath, 'utf-8');
+  const solData: SolutionsFile | GridSolution[] = JSON.parse(rawSol);
+  const boardSize = entData.board_size;
+
+  const grids = parseSolutions(solData, boardSize);
+
+  console.log(`Loaded ${grids.length.toLocaleString()} solutions from ${solutionsPath}`);
+  console.log(`Loaded ${entData.patterns.length.toLocaleString()} patterns from ${inputPath}`);
+  console.log('');
+
+  const buckets = new Map<string, TripleBucket>();
+
+  // Iterate patterns
+  for (const pattern of entData.patterns) {
+    const starsAbs: Point[] = pattern.initial_stars;
+    const forcedEmpty: Point[] = pattern.forced_empty || [];
+    const forcedStar: Point[] = pattern.forced_star || [];
+
+    // Compute compatible solutions for this pattern
+    const compatible = grids.filter(g => isSolutionCompatible(g, starsAbs));
+    if (compatible.length === 0) {
+      continue;
+    }
+
+    const compatCount = compatible.length;
+
+    const forcedEmptySet = new Set(forcedEmpty.map(keyOfPoint));
+    const forcedStarSet = new Set(forcedStar.map(keyOfPoint));
+    const starSet = new Set(starsAbs.map(keyOfPoint));
+
+    // 1) Forced triples: candidate is always empty (these are your current rules)
+    for (const cell of forcedEmpty) {
+      const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
+      const features = extractFeatures(starsAbs, cell, boardSize);
+
+      const key = JSON.stringify({ canonicalStars, canonicalCandidate });
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = {
+          canonicalStars,
+          canonicalCandidate,
+          occurrences: [],
+        };
+        buckets.set(key, bucket);
+      }
+
+      bucket.occurrences.push({
+        canonicalStars,
+        canonicalCandidate,
+        forced: true,
+        features,
+      });
+    }
+
+    // 2) Flexible triples: candidate is sometimes star and sometimes empty
+    for (let r = 0; r < boardSize; r++) {
+      for (let c = 0; c < boardSize; c++) {
+        const keyAbs = keyOfPoint([r, c]);
+        if (starSet.has(keyAbs)) continue;        // initial star
+        if (forcedEmptySet.has(keyAbs)) continue; // already handled as forced
+        if (forcedStarSet.has(keyAbs)) continue;  // you can exclude inherently forced stars
+
+        let starCount = 0;
+        for (const g of compatible) {
+          if (g[r][c] === 1) starCount++;
+        }
+
+        if (starCount === 0 || starCount === compatCount) {
+          // Always empty or always star → not a flexible triple
+          continue;
+        }
+
+        const cell: Point = [r, c];
+        const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
+        const features = extractFeatures(starsAbs, cell, boardSize);
+
+        const key = JSON.stringify({ canonicalStars, canonicalCandidate });
+        let bucket = buckets.get(key);
+        if (!bucket) {
+          bucket = {
+            canonicalStars,
+            canonicalCandidate,
+            occurrences: [],
+          };
+          buckets.set(key, bucket);
+        }
+
+        bucket.occurrences.push({
+          canonicalStars,
+          canonicalCandidate,
+          forced: false,
+          features,
+        });
+      }
+    }
+  }
+
+  // Build rules from buckets
+  const unconstrained_rules: TripleRule[] = [];
+  const constrained_rules: TripleRule[] = [];
+
+  for (const bucket of buckets.values()) {
+    const pos = bucket.occurrences.filter(o => o.forced);
+    const neg = bucket.occurrences.filter(o => !o.forced);
+
+    const positiveCount = pos.length;
+    const negativeCount = neg.length;
+
+    if (positiveCount < minOccurrences) {
+      continue;
+    }
+
+    // Pure / unconstrained triple entanglement (no observed flexible counterpart)
+    if (negativeCount === 0) {
+      unconstrained_rules.push({
+        canonical_stars: bucket.canonicalStars,
+        canonical_candidate: bucket.canonicalCandidate,
+        constraint_features: [],
+        forced: true,
+        occurrences: positiveCount,
+      });
+      continue;
+    }
+
+    // Constrained rules: need at least one positive and one negative
+    const featureNames = Object.keys(pos[0].features) as (keyof TripleFeatures)[];
+    const chosen: string[] = [];
+
+    for (const fname of featureNames) {
+      const allPosHave = pos.every(o => o.features[fname]);
+      const someNegLack = neg.some(o => !o.features[fname]);
+
+      if (allPosHave && someNegLack) {
+        chosen.push(fname);
+      }
+    }
+
+    if (chosen.length > 0) {
+      constrained_rules.push({
+        canonical_stars: bucket.canonicalStars,
+        canonical_candidate: bucket.canonicalCandidate,
+        constraint_features: chosen,
+        forced: true,
+        occurrences: positiveCount,
+      });
+    } else {
+      // If no separating feature, fall back to unconstrained rule
+      unconstrained_rules.push({
+        canonical_stars: bucket.canonicalStars,
+        canonical_candidate: bucket.canonicalCandidate,
+        constraint_features: [],
+        forced: true,
+        occurrences: positiveCount,
+      });
+    }
+  }
+
+  // Sort for stable output
+  const sortRule = (a: TripleRule, b: TripleRule) =>
+    JSON.stringify(a.canonical_stars).localeCompare(JSON.stringify(b.canonical_stars)) ||
+    JSON.stringify(a.canonical_candidate).localeCompare(JSON.stringify(b.canonical_candidate));
+
+  unconstrained_rules.sort(sortRule);
+  constrained_rules.sort(sortRule);
+
+  const out: TripleOutput = {
+    board_size: entData.board_size,
+    initial_stars: entData.initial_star_count,
+    unconstrained_rules,
+    constrained_rules,
   };
-  
-  // Load solutions
-  const solutionsContent = fs.readFileSync(solutionsPath, 'utf-8');
-  const solutions: Grid[] = JSON.parse(solutionsContent);
-  
-  const tripleEntanglements = mineTripleEntanglements(fullOutput, solutions, minOccurrences);
-  writeTripleEntanglementOutput(tripleEntanglements, outputPath);
-  
-  console.log(`Found ${tripleEntanglements.unconstrained_rules.length} unconstrained triple rules`);
-  console.log(`Found ${tripleEntanglements.constrained_rules.length} constrained triple rules`);
-  console.log(`Total unconstrained occurrences: ${tripleEntanglements.unconstrained_rules.reduce((sum, r) => sum + r.occurrences, 0)}`);
-  console.log(`Total constrained occurrences: ${tripleEntanglements.constrained_rules.reduce((sum, r) => sum + r.occurrences, 0)}`);
+
+  const outDir = path.dirname(outputPath);
+  if (!fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir, { recursive: true });
+  }
+
+  fs.writeFileSync(outputPath, JSON.stringify(out, null, 2), 'utf-8');
+  console.log(`Wrote triple entanglements to ${outputPath}`);
+}
+
+export function mineTripleEntanglements(
+  output: Output,
+  solutions: GridSolution[],
+  minOccurrences: number = 2,
+): TripleOutput {
+  const boardSize = output.board_size;
+  const grids = solutions;
+
+  const buckets = new Map<string, TripleBucket>();
+
+  // Iterate patterns
+  for (const pattern of output.patterns) {
+    // Convert initial_stars from Cell[] to Point[]
+    const starsAbs: Point[] = pattern.initial_stars.map(cell => [cell.row, cell.col]);
+    const forcedEmpty: Point[] = (pattern.forced_empty || []).map(cell => [cell.row, cell.col]);
+    const forcedStar: Point[] = (pattern.forced_star || []).map(cell => [cell.row, cell.col]);
+
+    // Compute compatible solutions for this pattern
+    const compatible = grids.filter(g => isSolutionCompatible(g, starsAbs));
+    if (compatible.length === 0) {
+      continue;
+    }
+
+    const compatCount = compatible.length;
+
+    const forcedEmptySet = new Set(forcedEmpty.map(keyOfPoint));
+    const forcedStarSet = new Set(forcedStar.map(keyOfPoint));
+    const starSet = new Set(starsAbs.map(keyOfPoint));
+
+    // 1) Forced triples: candidate is always empty (these are your current rules)
+    for (const cell of forcedEmpty) {
+      const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
+      const features = extractFeatures(starsAbs, cell, boardSize);
+
+      const key = JSON.stringify({ canonicalStars, canonicalCandidate });
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = {
+          canonicalStars,
+          canonicalCandidate,
+          occurrences: [],
+        };
+        buckets.set(key, bucket);
+      }
+
+      bucket.occurrences.push({
+        canonicalStars,
+        canonicalCandidate,
+        forced: true,
+        features,
+      });
+    }
+
+    // 2) Flexible triples: candidate is sometimes star and sometimes empty
+    for (let r = 0; r < boardSize; r++) {
+      for (let c = 0; c < boardSize; c++) {
+        const keyAbs = keyOfPoint([r, c]);
+        if (starSet.has(keyAbs)) continue;        // initial star
+        if (forcedEmptySet.has(keyAbs)) continue; // already handled as forced
+        if (forcedStarSet.has(keyAbs)) continue;  // you can exclude inherently forced stars
+
+        let starCount = 0;
+        for (const g of compatible) {
+          if (g[r][c] === 1) starCount++;
+        }
+
+        if (starCount === 0 || starCount === compatCount) {
+          // Always empty or always star → not a flexible triple
+          continue;
+        }
+
+        const cell: Point = [r, c];
+        const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
+        const features = extractFeatures(starsAbs, cell, boardSize);
+
+        const key = JSON.stringify({ canonicalStars, canonicalCandidate });
+        let bucket = buckets.get(key);
+        if (!bucket) {
+          bucket = {
+            canonicalStars,
+            canonicalCandidate,
+            occurrences: [],
+          };
+          buckets.set(key, bucket);
+        }
+
+        bucket.occurrences.push({
+          canonicalStars,
+          canonicalCandidate,
+          forced: false,
+          features,
+        });
+      }
+    }
+  }
+
+  // Build rules from buckets
+  const unconstrained_rules: TripleRule[] = [];
+  const constrained_rules: TripleRule[] = [];
+
+  for (const bucket of buckets.values()) {
+    const pos = bucket.occurrences.filter(o => o.forced);
+    const neg = bucket.occurrences.filter(o => !o.forced);
+
+    const positiveCount = pos.length;
+    const negativeCount = neg.length;
+
+    if (positiveCount < minOccurrences) {
+      continue;
+    }
+
+    // Pure / unconstrained triple entanglement (no observed flexible counterpart)
+    if (negativeCount === 0) {
+      unconstrained_rules.push({
+        canonical_stars: bucket.canonicalStars,
+        canonical_candidate: bucket.canonicalCandidate,
+        constraint_features: [],
+        forced: true,
+        occurrences: positiveCount,
+      });
+      continue;
+    }
+
+    // Constrained rules: need at least one positive and one negative
+    const featureNames = Object.keys(pos[0].features) as (keyof TripleFeatures)[];
+    const chosen: string[] = [];
+
+    for (const fname of featureNames) {
+      const allPosHave = pos.every(o => o.features[fname]);
+      const someNegLack = neg.some(o => !o.features[fname]);
+
+      if (allPosHave && someNegLack) {
+        chosen.push(fname);
+      }
+    }
+
+    if (chosen.length > 0) {
+      constrained_rules.push({
+        canonical_stars: bucket.canonicalStars,
+        canonical_candidate: bucket.canonicalCandidate,
+        constraint_features: chosen,
+        forced: true,
+        occurrences: positiveCount,
+      });
+    } else {
+      // If no separating feature, fall back to unconstrained rule
+      unconstrained_rules.push({
+        canonical_stars: bucket.canonicalStars,
+        canonical_candidate: bucket.canonicalCandidate,
+        constraint_features: [],
+        forced: true,
+        occurrences: positiveCount,
+      });
+    }
+  }
+
+  // Sort for stable output
+  const sortRule = (a: TripleRule, b: TripleRule) =>
+    JSON.stringify(a.canonical_stars).localeCompare(JSON.stringify(b.canonical_stars)) ||
+    JSON.stringify(a.canonical_candidate).localeCompare(JSON.stringify(b.canonical_candidate));
+
+  unconstrained_rules.sort(sortRule);
+  constrained_rules.sort(sortRule);
+
+  return {
+    board_size: output.board_size,
+    initial_stars: output.initial_star_count,
+    unconstrained_rules,
+    constrained_rules,
+  };
+}
+
+export function writeTripleEntanglementOutput(
+  tripleEntanglements: TripleOutput,
+  outputPath: string,
+): void {
+  const outDir = path.dirname(outputPath);
+  if (!fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir, { recursive: true });
+  }
+
+  fs.writeFileSync(outputPath, JSON.stringify(tripleEntanglements, null, 2), 'utf-8');
 }
