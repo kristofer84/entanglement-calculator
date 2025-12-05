@@ -112,18 +112,43 @@ interface TripleFeatures {
   some_star_on_bottom_edge: boolean;
   some_star_on_left_edge: boolean;
   some_star_on_right_edge: boolean;
+  // Star alignment features
+  candidate_in_same_row_as_any_star: boolean;
+  candidate_in_same_column_as_any_star: boolean;
+  candidate_between_stars_in_row: boolean;
+  candidate_between_stars_in_column: boolean;
+  // Row/column structural needs
+  candidate_row_needs_star: boolean;
+  candidate_column_needs_star: boolean;
+  // Ring index
+  ring_index: number;
+  candidate_in_ring_1: boolean;
+  // Corner K×K blocks
+  candidate_in_top_left_KxK: boolean;
+  candidate_in_top_right_KxK: boolean;
+  candidate_in_bottom_left_KxK: boolean;
+  candidate_in_bottom_right_KxK: boolean;
 }
 
-function extractFeatures(starsAbs: Point[], candidateAbs: Point, boardSize: number): TripleFeatures {
+function extractFeatures(
+  starsAbs: Point[],
+  candidateAbs: Point,
+  boardSize: number,
+  compatibleSolutions?: GridSolution[],
+  forcedStar?: Point[],
+  cornerBlockSize: number = 3,
+): TripleFeatures {
   const [r, c] = candidateAbs;
   const last = boardSize - 1;
+  const N = boardSize;
 
+  // Existing edge features
   const candidate_on_top_edge = r === 0;
   const candidate_on_bottom_edge = r === last;
   const candidate_on_left_edge = c === 0;
   const candidate_on_right_edge = c === last;
 
-  // “Ring” one cell in from the edge, similar to the Kris guide: distance 1 from any side
+  // "Ring" one cell in from the edge, similar to the Kris guide: distance 1 from any side
   const candidate_on_outer_ring =
     r === 1 || r === last - 1 || c === 1 || c === last - 1;
 
@@ -131,6 +156,71 @@ function extractFeatures(starsAbs: Point[], candidateAbs: Point, boardSize: numb
   const some_star_on_bottom_edge = starsAbs.some(([sr]) => sr === last);
   const some_star_on_left_edge = starsAbs.some(([, sc]) => sc === 0);
   const some_star_on_right_edge = starsAbs.some(([, sc]) => sc === last);
+
+  // 1. Star alignment features
+  const candidate_in_same_row_as_any_star = starsAbs.some(([sr]) => sr === r);
+  const candidate_in_same_column_as_any_star = starsAbs.some(([, sc]) => sc === c);
+
+  // candidate_between_stars_in_row: at least two stars share the candidate's row
+  // and candidate.col lies strictly between their min and max columns
+  const starsInRow = starsAbs.filter(([sr]) => sr === r);
+  let candidate_between_stars_in_row = false;
+  if (starsInRow.length >= 2) {
+    const cols = starsInRow.map(([, sc]) => sc);
+    const minCol = Math.min(...cols);
+    const maxCol = Math.max(...cols);
+    candidate_between_stars_in_row = c > minCol && c < maxCol;
+  }
+
+  // candidate_between_stars_in_column: at least two stars share the candidate's column
+  // and candidate.row lies strictly between their min and max rows
+  const starsInCol = starsAbs.filter(([, sc]) => sc === c);
+  let candidate_between_stars_in_column = false;
+  if (starsInCol.length >= 2) {
+    const rows = starsInCol.map(([sr]) => sr);
+    const minRow = Math.min(...rows);
+    const maxRow = Math.max(...rows);
+    candidate_between_stars_in_column = r > minRow && r < maxRow;
+  }
+
+  // 2. Row/column structural needs
+  let candidate_row_needs_star = false;
+  let candidate_column_needs_star = false;
+
+  if (compatibleSolutions && compatibleSolutions.length > 0) {
+    // Check if every compatible solution places at least one star in the candidate's row
+    // outside the candidate cell
+    candidate_row_needs_star = compatibleSolutions.every(grid => {
+      for (let col = 0; col < N; col++) {
+        if (col !== c && grid[r][col] === 1) {
+          return true; // Found a star in the row outside candidate cell
+        }
+      }
+      return false; // No star found in row outside candidate cell
+    });
+
+    // Check if every compatible solution places at least one star in the candidate's column
+    // outside the candidate cell
+    candidate_column_needs_star = compatibleSolutions.every(grid => {
+      for (let row = 0; row < N; row++) {
+        if (row !== r && grid[row][c] === 1) {
+          return true; // Found a star in the column outside candidate cell
+        }
+      }
+      return false; // No star found in column outside candidate cell
+    });
+  }
+
+  // 3. Ring index
+  const ring_index = Math.min(r, c, N - 1 - r, N - 1 - c);
+  const candidate_in_ring_1 = ring_index === 1;
+
+  // 4. Corner K×K blocks
+  const K = cornerBlockSize;
+  const candidate_in_top_left_KxK = r < K && c < K;
+  const candidate_in_top_right_KxK = r < K && c >= N - K;
+  const candidate_in_bottom_left_KxK = r >= N - K && c < K;
+  const candidate_in_bottom_right_KxK = r >= N - K && c >= N - K;
 
   return {
     candidate_on_top_edge,
@@ -142,6 +232,18 @@ function extractFeatures(starsAbs: Point[], candidateAbs: Point, boardSize: numb
     some_star_on_bottom_edge,
     some_star_on_left_edge,
     some_star_on_right_edge,
+    candidate_in_same_row_as_any_star,
+    candidate_in_same_column_as_any_star,
+    candidate_between_stars_in_row,
+    candidate_between_stars_in_column,
+    candidate_row_needs_star,
+    candidate_column_needs_star,
+    ring_index,
+    candidate_in_ring_1,
+    candidate_in_top_left_KxK,
+    candidate_in_top_right_KxK,
+    candidate_in_bottom_left_KxK,
+    candidate_in_bottom_right_KxK,
   };
 }
 
@@ -245,7 +347,7 @@ export function mineTripleFromFile(
     // 1) Forced triples: candidate is always empty (these are your current rules)
     for (const cell of forcedEmpty) {
       const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
-      const features = extractFeatures(starsAbs, cell, boardSize);
+      const features = extractFeatures(starsAbs, cell, boardSize, compatible, forcedStar);
 
       const key = JSON.stringify({ canonicalStars, canonicalCandidate });
       let bucket = buckets.get(key);
@@ -286,7 +388,7 @@ export function mineTripleFromFile(
 
         const cell: Point = [r, c];
         const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
-        const features = extractFeatures(starsAbs, cell, boardSize);
+        const features = extractFeatures(starsAbs, cell, boardSize, compatible, forcedStar);
 
         const key = JSON.stringify({ canonicalStars, canonicalCandidate });
         let bucket = buckets.get(key);
@@ -425,7 +527,7 @@ export function mineTripleEntanglements(
     // 1) Forced triples: candidate is always empty (these are your current rules)
     for (const cell of forcedEmpty) {
       const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
-      const features = extractFeatures(starsAbs, cell, boardSize);
+      const features = extractFeatures(starsAbs, cell, boardSize, compatible, forcedStar);
 
       const key = JSON.stringify({ canonicalStars, canonicalCandidate });
       let bucket = buckets.get(key);
@@ -466,7 +568,7 @@ export function mineTripleEntanglements(
 
         const cell: Point = [r, c];
         const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
-        const features = extractFeatures(starsAbs, cell, boardSize);
+        const features = extractFeatures(starsAbs, cell, boardSize, compatible, forcedStar);
 
         const key = JSON.stringify({ canonicalStars, canonicalCandidate });
         let bucket = buckets.get(key);
