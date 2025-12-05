@@ -1,4 +1,4 @@
-import { Grid, Cell, Pattern } from './types';
+import { Grid, Cell, Pattern } from '../types';
 import { ConfigurationEnumerator } from './enumeration';
 
 export class PatternAnalyzer {

@@ -1,14 +1,14 @@
 import * as path from 'path';
-import { ConfigurationEnumerator } from './enumeration';
-import { PatternAnalyzer } from './patternAnalyzer';
-import { calculateIterations, formatNumber, promptConfirmation, writeOutput } from './utils';
-import { Output } from './types';
+import { ConfigurationEnumerator } from '../core/enumeration';
+import { PatternAnalyzer } from '../core/patternAnalyzer';
+import { calculateIterations, formatNumber, promptConfirmation, writeOutput } from '../utils';
+import { Output } from '../types';
 import { Worker } from 'worker_threads';
 import * as os from 'os';
 import * as fs from 'fs';
-import { extractPureEntanglements, writePureEntanglementOutput } from './pureEntanglementExtractor';
-import { mineConstrainedEntanglements, writeConstrainedEntanglementOutput } from './constrainedEntanglementMiner';
-import { mineTripleEntanglements, writeTripleEntanglementOutput } from './tripleEntanglementMiner';
+import { extractPureEntanglements, writePureEntanglementOutput } from '../miners/pureEntanglementExtractor';
+import { mineConstrainedEntanglements, writeConstrainedEntanglementOutput } from '../miners/constrainedEntanglementMiner';
+import { mineTripleEntanglements, writeTripleEntanglementOutput } from '../miners/tripleEntanglementMiner';
 
 // Parse command line arguments manually to handle --key=value format
 function parseArgs(): { gridSize: number; starsPerLine: number; entangledStars: number; output: string; includeInherent: boolean; includeCompatibleSolutions: boolean } {
@@ -183,7 +183,7 @@ async function main() {
   }, 1000);
 
   // Create workers
-  const workerPath = path.join(__dirname, 'worker.js');
+  const workerPath = path.join(__dirname, '../workers/worker.js');
   for (let i = 0; i < numWorkers; i++) {
     workerResults[i] = [];
     workerProgress[i] = 0;

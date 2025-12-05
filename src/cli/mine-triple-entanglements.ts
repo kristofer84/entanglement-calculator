@@ -1,4 +1,4 @@
-import { mineTripleFromFile } from './tripleEntanglementMiner';
+import { mineTripleFromFile } from '../miners/tripleEntanglementMiner';
 import * as path from 'path';
 
 // Parse command line arguments

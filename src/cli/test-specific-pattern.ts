@@ -1,6 +1,6 @@
-import { ConfigurationEnumerator } from './enumeration';
-import { PatternAnalyzer } from './patternAnalyzer';
-import { Cell } from './types';
+import { ConfigurationEnumerator } from '../core/enumeration';
+import { PatternAnalyzer } from '../core/patternAnalyzer';
+import { Cell } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
 

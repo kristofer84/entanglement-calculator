@@ -1,6 +1,6 @@
 import { parentPort, workerData } from 'worker_threads';
-import { PatternAnalyzer } from './patternAnalyzer';
-import { Grid, Cell } from './types';
+import { PatternAnalyzer } from '../core/patternAnalyzer';
+import { Grid, Cell } from '../types';
 
 interface WorkerData {
   solutions: Grid[];

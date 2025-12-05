@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Output } from './types';
+import { Output } from '../types';
 
 /**
  * Calculate the number of iterations required

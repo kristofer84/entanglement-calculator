@@ -2,24 +2,28 @@
   "name": "entanglement-calculator",
   "version": "1.0.0",
   "description": "Precomputes and analyzes star configurations for Star Battle-style grids",
-  "main": "dist/index.js",
+  "main": "dist/cli/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
-    "test:pattern": "ts-node src/test-specific-pattern.ts"
+    "start": "node dist/cli/index.js",
+    "dev": "ts-node src/cli/index.ts",
+    "test:pattern": "ts-node src/cli/test-specific-pattern.ts",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
     "@types/node": "^20.10.0",
+    "@vitest/coverage-v8": "^4.0.15",
     "ts-node": "^10.9.2",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.15"
   },
   "dependencies": {
-    "commander": "^11.1.0",
-    "@types/commander": "^2.12.2"
+    "@types/commander": "^2.12.2",
+    "commander": "^11.1.0"
   }
 }
-

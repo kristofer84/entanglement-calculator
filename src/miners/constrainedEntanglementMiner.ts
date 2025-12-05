@@ -1,4 +1,4 @@
-import { Pattern, Output } from './types';
+import { Pattern, Output } from '../types';
 import { canonicalize, Point } from './pureEntanglementExtractor';
 import * as fs from 'fs';
 import * as path from 'path';

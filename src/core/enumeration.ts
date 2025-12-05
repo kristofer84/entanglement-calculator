@@ -1,4 +1,4 @@
-import { Grid, Cell } from './types';
+import { Grid, Cell } from '../types';
 
 export class ConfigurationEnumerator {
   private boardSize: number;
