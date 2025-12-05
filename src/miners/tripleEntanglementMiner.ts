@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Output } from '../types';
+import { Output, Cell } from '../types';
 
 type Point = [number, number];
 
@@ -290,6 +290,37 @@ function isSolutionCompatible(grid: GridSolution, stars: Point[]): boolean {
   return stars.every(([r, c]) => grid[r][c] === 1);
 }
 
+/**
+ * Enumerate all locally valid star pairs without any filtering.
+ * This ensures we see all possible star pair placements, not just "interesting" ones.
+ */
+function enumerateAllStarPairs(boardSize: number): Cell[][] {
+  const pairs: Cell[][] = [];
+
+  for (let r1 = 0; r1 < boardSize; r1++) {
+    for (let c1 = 0; c1 < boardSize; c1++) {
+      for (let r2 = 0; r2 < boardSize; r2++) {
+        for (let c2 = 0; c2 < boardSize; c2++) {
+          // Skip same cell
+          if (r1 === r2 && c1 === c2) continue;
+
+          // Local non-adjacency (no touching 8-neighbors)
+          const dr = Math.abs(r1 - r2);
+          const dc = Math.abs(c1 - c2);
+          if (dr <= 1 && dc <= 1) continue;
+
+          pairs.push([
+            { row: r1, col: c1 },
+            { row: r2, col: c2 },
+          ]);
+        }
+      }
+    }
+  }
+
+  return pairs;
+}
+
 // ----------------- Main mining logic -----------------
 
 interface TripleOccurrence {
@@ -321,18 +352,24 @@ export function mineTripleFromFile(
   const grids = parseSolutions(solData, boardSize);
 
   console.log(`Loaded ${grids.length.toLocaleString()} solutions from ${solutionsPath}`);
-  console.log(`Loaded ${entData.patterns.length.toLocaleString()} patterns from ${inputPath}`);
+  console.log('');
+
+  // Enumerate all locally valid star pairs without any filtering
+  // This ensures we see all possible star pair placements, not just "interesting" ones
+  const allStarPairs = enumerateAllStarPairs(boardSize);
+  
+  console.log(`Enumerated ${allStarPairs.length.toLocaleString()} locally valid star pairs`);
   console.log('');
 
   const buckets = new Map<string, TripleBucket>();
 
-  // Iterate patterns
-  for (const pattern of entData.patterns) {
-    const starsAbs: Point[] = pattern.initial_stars;
-    const forcedEmpty: Point[] = pattern.forced_empty || [];
-    const forcedStar: Point[] = pattern.forced_star || [];
+  // Iterate over all valid star pairs
+  for (const starPair of allStarPairs) {
+    // Convert Cell[] to Point[]
+    const starsAbs: Point[] = starPair.map(cell => [cell.row, cell.col]);
+    const forcedStar: Point[] = []; // No forced stars when enumerating all pairs
 
-    // Compute compatible solutions for this pattern
+    // Compute compatible solutions for this star pair
     const compatible = grids.filter(g => isSolutionCompatible(g, starsAbs));
     if (compatible.length === 0) {
       continue;
@@ -340,51 +377,20 @@ export function mineTripleFromFile(
 
     const compatCount = compatible.length;
 
-    const forcedEmptySet = new Set(forcedEmpty.map(keyOfPoint));
-    const forcedStarSet = new Set(forcedStar.map(keyOfPoint));
     const starSet = new Set(starsAbs.map(keyOfPoint));
 
-    // 1) Forced triples: candidate is always empty (these are your current rules)
-    for (const cell of forcedEmpty) {
-      const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
-      const features = extractFeatures(starsAbs, cell, boardSize, compatible, forcedStar);
-
-      const key = JSON.stringify({ canonicalStars, canonicalCandidate });
-      let bucket = buckets.get(key);
-      if (!bucket) {
-        bucket = {
-          canonicalStars,
-          canonicalCandidate,
-          occurrences: [],
-        };
-        buckets.set(key, bucket);
-      }
-
-      bucket.occurrences.push({
-        canonicalStars,
-        canonicalCandidate,
-        forced: true,
-        features,
-      });
-    }
-
-    // 2) Flexible triples: candidate is sometimes star and sometimes empty
+    // Classify all candidate cells by checking ALL compatible solutions
     for (let r = 0; r < boardSize; r++) {
       for (let c = 0; c < boardSize; c++) {
         const keyAbs = keyOfPoint([r, c]);
-        if (starSet.has(keyAbs)) continue;        // initial star
-        if (forcedEmptySet.has(keyAbs)) continue; // already handled as forced
-        if (forcedStarSet.has(keyAbs)) continue;  // you can exclude inherently forced stars
+        if (starSet.has(keyAbs)) continue; // Skip initial stars
 
+        // Count stars in this cell across all compatible solutions
         let starCount = 0;
         for (const g of compatible) {
           if (g[r][c] === 1) starCount++;
         }
-
-        if (starCount === 0 || starCount === compatCount) {
-          // Always empty or always star → not a flexible triple
-          continue;
-        }
+        const emptyCount = compatCount - starCount;
 
         const cell: Point = [r, c];
         const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
@@ -401,12 +407,40 @@ export function mineTripleFromFile(
           buckets.set(key, bucket);
         }
 
-        bucket.occurrences.push({
-          canonicalStars,
-          canonicalCandidate,
-          forced: false,
-          features,
-        });
+        // Classify based on ALL compatible solutions - must be 100% consistent
+        if (starCount === 0) {
+          // Forced empty: cell is empty in ALL compatible solutions (100% forced)
+          // Verify: emptyCount should equal compatCount
+          if (emptyCount !== compatCount) {
+            throw new Error(`Classification error: cell [${r},${c}] marked as forced empty but emptyCount (${emptyCount}) !== compatCount (${compatCount})`);
+          }
+          bucket.occurrences.push({
+            canonicalStars,
+            canonicalCandidate,
+            forced: true,
+            features,
+          });
+        } else if (emptyCount === 0) {
+          // Forced star: cell has a star in ALL compatible solutions (100% forced)
+          // Verify: starCount should equal compatCount
+          if (starCount !== compatCount) {
+            throw new Error(`Classification error: cell [${r},${c}] marked as forced star but starCount (${starCount}) !== compatCount (${compatCount})`);
+          }
+          // Skip forced stars for now (optional feature)
+          continue;
+        } else {
+          // Flexible: cell is sometimes star and sometimes empty (NOT forced)
+          // Verify: both starCount and emptyCount are > 0
+          if (starCount === 0 || emptyCount === 0) {
+            throw new Error(`Classification error: cell [${r},${c}] marked as flexible but starCount=${starCount}, emptyCount=${emptyCount}`);
+          }
+          bucket.occurrences.push({
+            canonicalStars,
+            canonicalCandidate,
+            forced: false,
+            features,
+          });
+        }
       }
     }
   }
@@ -439,15 +473,45 @@ export function mineTripleFromFile(
     }
 
     // Constrained rules: need at least one positive and one negative
-    const featureNames = Object.keys(pos[0].features) as (keyof TripleFeatures)[];
+    if (pos.length === 0) {
+      continue; // Safety check: should not happen due to minOccurrences check above
+    }
+    // Separate boolean and numeric features
+    const allFeatureKeys = Object.keys(pos[0].features) as (keyof TripleFeatures)[];
+
+    const booleanFeatureKeys = allFeatureKeys.filter(
+      (name) => typeof pos[0].features[name] === 'boolean'
+    ) as (keyof TripleFeatures)[];
+
+    const numericFeatureKeys = allFeatureKeys.filter(
+      (name) => typeof pos[0].features[name] === 'number'
+    ) as (keyof TripleFeatures)[];
+
     const chosen: string[] = [];
 
-    for (const fname of featureNames) {
-      const allPosHave = pos.every(o => o.features[fname]);
-      const someNegLack = neg.some(o => !o.features[fname]);
+    // 1) Boolean features: same logic as before, but explicitly boolean
+    for (const fname of booleanFeatureKeys) {
+      const allPosTrue = pos.every(o => o.features[fname] === true);
+      const someNegNotTrue = neg.some(o => o.features[fname] !== true);
 
-      if (allPosHave && someNegLack) {
-        chosen.push(fname);
+      if (allPosTrue && someNegNotTrue) {
+        chosen.push(fname as string);
+      }
+    }
+
+    // 2) Numeric features: currently only ring_index, treat as equality constraint
+    for (const fname of numericFeatureKeys) {
+      const posValues = pos.map(o => o.features[fname] as number);
+      const negValues = neg.map(o => o.features[fname] as number);
+
+      // All positives must share the same value
+      const value = posValues[0];
+      const allPosSame = posValues.every(v => v === value);
+      const someNegDifferent = negValues.some(v => v !== value);
+
+      if (allPosSame && someNegDifferent) {
+        // Encode as "ring_index=1", "ring_index=2", etc.
+        chosen.push(`${fname}=${value}`);
       }
     }
 
@@ -460,14 +524,9 @@ export function mineTripleFromFile(
         occurrences: positiveCount,
       });
     } else {
-      // If no separating feature, fall back to unconstrained rule
-      unconstrained_rules.push({
-        canonical_stars: bucket.canonicalStars,
-        canonical_candidate: bucket.canonicalCandidate,
-        constraint_features: [],
-        forced: true,
-        occurrences: positiveCount,
-      });
+      // If no separating feature exists, do NOT emit a rule
+      // This triple has counterexamples (flexible cells) and no feature can separate them
+      // Skip this bucket
     }
   }
 
@@ -503,16 +562,19 @@ export function mineTripleEntanglements(
   const boardSize = output.board_size;
   const grids = solutions;
 
+  // Enumerate all locally valid star pairs without any filtering
+  // This ensures we see all possible star pair placements, not just "interesting" ones
+  const allStarPairs = enumerateAllStarPairs(boardSize);
+
   const buckets = new Map<string, TripleBucket>();
 
-  // Iterate patterns
-  for (const pattern of output.patterns) {
-    // Convert initial_stars from Cell[] to Point[]
-    const starsAbs: Point[] = pattern.initial_stars.map(cell => [cell.row, cell.col]);
-    const forcedEmpty: Point[] = (pattern.forced_empty || []).map(cell => [cell.row, cell.col]);
-    const forcedStar: Point[] = (pattern.forced_star || []).map(cell => [cell.row, cell.col]);
+  // Iterate over all valid star pairs
+  for (const starPair of allStarPairs) {
+    // Convert Cell[] to Point[]
+    const starsAbs: Point[] = starPair.map(cell => [cell.row, cell.col]);
+    const forcedStar: Point[] = []; // No forced stars when enumerating all pairs
 
-    // Compute compatible solutions for this pattern
+    // Compute compatible solutions for this star pair
     const compatible = grids.filter(g => isSolutionCompatible(g, starsAbs));
     if (compatible.length === 0) {
       continue;
@@ -520,51 +582,20 @@ export function mineTripleEntanglements(
 
     const compatCount = compatible.length;
 
-    const forcedEmptySet = new Set(forcedEmpty.map(keyOfPoint));
-    const forcedStarSet = new Set(forcedStar.map(keyOfPoint));
     const starSet = new Set(starsAbs.map(keyOfPoint));
 
-    // 1) Forced triples: candidate is always empty (these are your current rules)
-    for (const cell of forcedEmpty) {
-      const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
-      const features = extractFeatures(starsAbs, cell, boardSize, compatible, forcedStar);
-
-      const key = JSON.stringify({ canonicalStars, canonicalCandidate });
-      let bucket = buckets.get(key);
-      if (!bucket) {
-        bucket = {
-          canonicalStars,
-          canonicalCandidate,
-          occurrences: [],
-        };
-        buckets.set(key, bucket);
-      }
-
-      bucket.occurrences.push({
-        canonicalStars,
-        canonicalCandidate,
-        forced: true,
-        features,
-      });
-    }
-
-    // 2) Flexible triples: candidate is sometimes star and sometimes empty
+    // Classify all candidate cells by checking ALL compatible solutions
     for (let r = 0; r < boardSize; r++) {
       for (let c = 0; c < boardSize; c++) {
         const keyAbs = keyOfPoint([r, c]);
-        if (starSet.has(keyAbs)) continue;        // initial star
-        if (forcedEmptySet.has(keyAbs)) continue; // already handled as forced
-        if (forcedStarSet.has(keyAbs)) continue;  // you can exclude inherently forced stars
+        if (starSet.has(keyAbs)) continue; // Skip initial stars
 
+        // Count stars in this cell across all compatible solutions
         let starCount = 0;
         for (const g of compatible) {
           if (g[r][c] === 1) starCount++;
         }
-
-        if (starCount === 0 || starCount === compatCount) {
-          // Always empty or always star → not a flexible triple
-          continue;
-        }
+        const emptyCount = compatCount - starCount;
 
         const cell: Point = [r, c];
         const { canonicalStars, canonicalCandidate } = canonicalizeTriple(starsAbs, cell);
@@ -581,12 +612,40 @@ export function mineTripleEntanglements(
           buckets.set(key, bucket);
         }
 
-        bucket.occurrences.push({
-          canonicalStars,
-          canonicalCandidate,
-          forced: false,
-          features,
-        });
+        // Classify based on ALL compatible solutions - must be 100% consistent
+        if (starCount === 0) {
+          // Forced empty: cell is empty in ALL compatible solutions (100% forced)
+          // Verify: emptyCount should equal compatCount
+          if (emptyCount !== compatCount) {
+            throw new Error(`Classification error: cell [${r},${c}] marked as forced empty but emptyCount (${emptyCount}) !== compatCount (${compatCount})`);
+          }
+          bucket.occurrences.push({
+            canonicalStars,
+            canonicalCandidate,
+            forced: true,
+            features,
+          });
+        } else if (emptyCount === 0) {
+          // Forced star: cell has a star in ALL compatible solutions (100% forced)
+          // Verify: starCount should equal compatCount
+          if (starCount !== compatCount) {
+            throw new Error(`Classification error: cell [${r},${c}] marked as forced star but starCount (${starCount}) !== compatCount (${compatCount})`);
+          }
+          // Skip forced stars for now (optional feature)
+          continue;
+        } else {
+          // Flexible: cell is sometimes star and sometimes empty (NOT forced)
+          // Verify: both starCount and emptyCount are > 0
+          if (starCount === 0 || emptyCount === 0) {
+            throw new Error(`Classification error: cell [${r},${c}] marked as flexible but starCount=${starCount}, emptyCount=${emptyCount}`);
+          }
+          bucket.occurrences.push({
+            canonicalStars,
+            canonicalCandidate,
+            forced: false,
+            features,
+          });
+        }
       }
     }
   }
@@ -619,15 +678,45 @@ export function mineTripleEntanglements(
     }
 
     // Constrained rules: need at least one positive and one negative
-    const featureNames = Object.keys(pos[0].features) as (keyof TripleFeatures)[];
+    if (pos.length === 0) {
+      continue; // Safety check: should not happen due to minOccurrences check above
+    }
+    // Separate boolean and numeric features
+    const allFeatureKeys = Object.keys(pos[0].features) as (keyof TripleFeatures)[];
+
+    const booleanFeatureKeys = allFeatureKeys.filter(
+      (name) => typeof pos[0].features[name] === 'boolean'
+    ) as (keyof TripleFeatures)[];
+
+    const numericFeatureKeys = allFeatureKeys.filter(
+      (name) => typeof pos[0].features[name] === 'number'
+    ) as (keyof TripleFeatures)[];
+
     const chosen: string[] = [];
 
-    for (const fname of featureNames) {
-      const allPosHave = pos.every(o => o.features[fname]);
-      const someNegLack = neg.some(o => !o.features[fname]);
+    // 1) Boolean features: same logic as before, but explicitly boolean
+    for (const fname of booleanFeatureKeys) {
+      const allPosTrue = pos.every(o => o.features[fname] === true);
+      const someNegNotTrue = neg.some(o => o.features[fname] !== true);
 
-      if (allPosHave && someNegLack) {
-        chosen.push(fname);
+      if (allPosTrue && someNegNotTrue) {
+        chosen.push(fname as string);
+      }
+    }
+
+    // 2) Numeric features: currently only ring_index, treat as equality constraint
+    for (const fname of numericFeatureKeys) {
+      const posValues = pos.map(o => o.features[fname] as number);
+      const negValues = neg.map(o => o.features[fname] as number);
+
+      // All positives must share the same value
+      const value = posValues[0];
+      const allPosSame = posValues.every(v => v === value);
+      const someNegDifferent = negValues.some(v => v !== value);
+
+      if (allPosSame && someNegDifferent) {
+        // Encode as "ring_index=1", "ring_index=2", etc.
+        chosen.push(`${fname}=${value}`);
       }
     }
 
@@ -640,14 +729,9 @@ export function mineTripleEntanglements(
         occurrences: positiveCount,
       });
     } else {
-      // If no separating feature, fall back to unconstrained rule
-      unconstrained_rules.push({
-        canonical_stars: bucket.canonicalStars,
-        canonical_candidate: bucket.canonicalCandidate,
-        constraint_features: [],
-        forced: true,
-        occurrences: positiveCount,
-      });
+      // If no separating feature exists, do NOT emit a rule
+      // This triple has counterexamples (flexible cells) and no feature can separate them
+      // Skip this bucket
     }
   }
 
