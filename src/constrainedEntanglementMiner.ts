@@ -1,11 +1,9 @@
 import { Pattern, Output } from './types';
-import { canonicalizeStars, canonicalizeEmpties, transforms, CanonicalizationResult, Point } from './pureEntanglementExtractor';
+import { canonicalize, Point } from './pureEntanglementExtractor';
 import * as fs from 'fs';
 import * as path from 'path';
 
 // Type definitions
-type StarPair = [Point, Point];
-
 interface Occurrence {
   canonical_stars: Point[];
   canonical_forced_empty: Point[];
@@ -16,33 +14,21 @@ interface Occurrence {
 }
 
 interface FeatureSet {
-  // Star position features
-  star0_on_top_edge: boolean;
-  star0_on_bottom_edge: boolean;
-  star0_on_left_edge: boolean;
-  star0_on_right_edge: boolean;
-  star1_on_top_edge: boolean;
-  star1_on_bottom_edge: boolean;
-  star1_on_left_edge: boolean;
-  star1_on_right_edge: boolean;
+  // Star-based features (work for any Z)
+  anyStarOnTopEdge: boolean;
+  anyStarOnBottomEdge: boolean;
+  anyStarOnLeftEdge: boolean;
+  anyStarOnRightEdge: boolean;
+  allStarsInLeftHalf: boolean;
+  allStarsInRightHalf: boolean;
+  allStarsInTopHalf: boolean;
+  allStarsInBottomHalf: boolean;
   
   // Combined star position features
   min_row_is_0: boolean;
   max_row_is_board_size_minus_1: boolean;
   min_col_is_0: boolean;
   max_col_is_board_size_minus_1: boolean;
-  
-  // Relative position features
-  stars_same_row: boolean;
-  stars_same_col: boolean;
-  row_distance: number;
-  col_distance: number;
-  
-  // Half-region features
-  both_stars_in_top_half: boolean;
-  both_stars_in_bottom_half: boolean;
-  both_stars_in_left_half: boolean;
-  both_stars_in_right_half: boolean;
   
   // Empty cell features
   has_empty_on_row0: boolean;
@@ -70,20 +56,22 @@ interface ConstrainedEntanglementOutput {
 }
 
 /**
- * Extract features from an occurrence
+ * Extract features from an occurrence (works for any Z stars)
  */
 function extractFeatures(
   occurrence: Occurrence,
   boardSize: number
 ): FeatureSet {
-  const [star0, star1] = occurrence.abs_stars;
-  const [s0_row, s0_col] = star0;
-  const [s1_row, s1_col] = star1;
+  const stars = occurrence.abs_stars;
   
-  const minRow = Math.min(s0_row, s1_row);
-  const maxRow = Math.max(s0_row, s1_row);
-  const minCol = Math.min(s0_col, s1_col);
-  const maxCol = Math.max(s0_col, s1_col);
+  if (stars.length === 0) {
+    throw new Error('extractFeatures expects at least one star');
+  }
+  
+  const minRow = Math.min(...stars.map(([r]) => r));
+  const maxRow = Math.max(...stars.map(([r]) => r));
+  const minCol = Math.min(...stars.map(([, c]) => c));
+  const maxCol = Math.max(...stars.map(([, c]) => c));
   
   const halfSize = Math.floor(boardSize / 2);
   
@@ -91,40 +79,38 @@ function extractFeatures(
   const empties = occurrence.abs_forced_empty;
   const emptyRows = new Set(empties.map(([r]) => r));
   const emptyCols = new Set(empties.map(([, c]) => c));
-  const emptySet = new Set(empties.map(([r, c]) => `${r},${c}`));
   
   const hasEmptyInRegion = (minR: number, maxR: number, minC: number, maxC: number): boolean => {
     return empties.some(([r, c]) => r >= minR && r <= maxR && c >= minC && c <= maxC);
   };
   
+  // Aggregate star features
+  const anyStarOnTopEdge = stars.some(([r]) => r === 0);
+  const anyStarOnBottomEdge = stars.some(([r]) => r === boardSize - 1);
+  const anyStarOnLeftEdge = stars.some(([, c]) => c === 0);
+  const anyStarOnRightEdge = stars.some(([, c]) => c === boardSize - 1);
+  
+  const allStarsInTopHalf = stars.every(([r]) => r < halfSize);
+  const allStarsInBottomHalf = stars.every(([r]) => r >= halfSize);
+  const allStarsInLeftHalf = stars.every(([, c]) => c < halfSize);
+  const allStarsInRightHalf = stars.every(([, c]) => c >= halfSize);
+  
   return {
-    // Star position features
-    star0_on_top_edge: s0_row === 0,
-    star0_on_bottom_edge: s0_row === boardSize - 1,
-    star0_on_left_edge: s0_col === 0,
-    star0_on_right_edge: s0_col === boardSize - 1,
-    star1_on_top_edge: s1_row === 0,
-    star1_on_bottom_edge: s1_row === boardSize - 1,
-    star1_on_left_edge: s1_col === 0,
-    star1_on_right_edge: s1_col === boardSize - 1,
+    // Star-based features (work for any Z)
+    anyStarOnTopEdge,
+    anyStarOnBottomEdge,
+    anyStarOnLeftEdge,
+    anyStarOnRightEdge,
+    allStarsInLeftHalf,
+    allStarsInRightHalf,
+    allStarsInTopHalf,
+    allStarsInBottomHalf,
     
     // Combined star position features
     min_row_is_0: minRow === 0,
     max_row_is_board_size_minus_1: maxRow === boardSize - 1,
     min_col_is_0: minCol === 0,
     max_col_is_board_size_minus_1: maxCol === boardSize - 1,
-    
-    // Relative position features
-    stars_same_row: s0_row === s1_row,
-    stars_same_col: s0_col === s1_col,
-    row_distance: Math.abs(s0_row - s1_row),
-    col_distance: Math.abs(s0_col - s1_col),
-    
-    // Half-region features
-    both_stars_in_top_half: s0_row < halfSize && s1_row < halfSize,
-    both_stars_in_bottom_half: s0_row >= halfSize && s1_row >= halfSize,
-    both_stars_in_left_half: s0_col < halfSize && s1_col < halfSize,
-    both_stars_in_right_half: s0_col >= halfSize && s1_col >= halfSize,
     
     // Empty cell features
     has_empty_on_row0: emptyRows.has(0),
@@ -143,24 +129,18 @@ function extractFeatures(
  */
 function getFeatureNames(): string[] {
   return [
-    'star0_on_top_edge',
-    'star0_on_bottom_edge',
-    'star0_on_left_edge',
-    'star0_on_right_edge',
-    'star1_on_top_edge',
-    'star1_on_bottom_edge',
-    'star1_on_left_edge',
-    'star1_on_right_edge',
+    'anyStarOnTopEdge',
+    'anyStarOnBottomEdge',
+    'anyStarOnLeftEdge',
+    'anyStarOnRightEdge',
+    'allStarsInLeftHalf',
+    'allStarsInRightHalf',
+    'allStarsInTopHalf',
+    'allStarsInBottomHalf',
     'min_row_is_0',
     'max_row_is_board_size_minus_1',
     'min_col_is_0',
     'max_col_is_board_size_minus_1',
-    'stars_same_row',
-    'stars_same_col',
-    'both_stars_in_top_half',
-    'both_stars_in_bottom_half',
-    'both_stars_in_left_half',
-    'both_stars_in_right_half',
     'has_empty_on_row0',
     'has_empty_on_row_board_size_minus_1',
     'has_empty_on_col0',
@@ -193,24 +173,21 @@ export function mineConstrainedEntanglements(
     // Convert initial_stars from Cell[] to Point[]
     const initialStars: Point[] = pattern.initial_stars.map(cell => [cell.row, cell.col]);
     
-    // Skip patterns that don't have exactly 2 stars (canonicalization requires pairs)
-    if (initialStars.length !== 2) {
+    // Skip patterns with no stars
+    if (initialStars.length === 0) {
       continue;
     }
     
     // Convert forced_empty from Cell[] to Point[]
     const forcedEmpty: Point[] = pattern.forced_empty.map(cell => [cell.row, cell.col]);
     
-    // Canonicalize stars
-    const { canonicalStars, transformIndex, translation } = canonicalizeStars(initialStars);
-    
-    // Canonicalize empties
-    const canonicalEmpties = canonicalizeEmpties(forcedEmpty, transformIndex, translation);
+    // Canonicalize stars and empties together using generic canonicalize
+    const { canonicalStars, canonicalCells } = canonicalize(initialStars, forcedEmpty);
     
     // Create occurrence record
     const occurrence: Occurrence = {
       canonical_stars: canonicalStars,
-      canonical_forced_empty: canonicalEmpties,
+      canonical_forced_empty: canonicalCells,
       abs_stars: initialStars,
       abs_forced_empty: forcedEmpty,
       compatible_solutions: pattern.compatible_solutions,

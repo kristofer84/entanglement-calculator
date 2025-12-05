@@ -33,6 +33,13 @@ export interface CanonicalizationResult {
   translation: Point; // [min_row, min_col]
 }
 
+export interface CanonicalPattern {
+  canonicalStars: Point[];
+  canonicalCells: Point[];
+  transformIndex: number;
+  translation: Point;
+}
+
 interface StarClass {
   occurrenceCount: number;
   emptiesMap: Map<string, number>; // key is JSON stringified sorted array of points
@@ -51,60 +58,78 @@ interface PureEntanglementOutput {
 }
 
 /**
- * Canonicalize a star pair using D4 symmetry
+ * Generic canonicalization function that works with Z stars (any number of stars)
+ * Applies D4 symmetry transforms and translation to find canonical form
+ */
+export function canonicalize(pointsStars: Point[], pointsCells: Point[]): CanonicalPattern {
+  if (pointsStars.length === 0) {
+    throw new Error('canonicalize expects at least one star');
+  }
+
+  let bestStars: Point[] | null = null;
+  let bestCells: Point[] = [];
+  let bestTransformIndex = 0;
+  let bestTranslation: Point = [0, 0];
+  let bestKey: string = '';
+
+  // Try all 8 D4 transforms
+  for (let t = 0; t < transforms.length; t++) {
+    const tf = transforms[t];
+
+    // Apply transform to all stars
+    const sT = pointsStars.map(star => tf(star[0], star[1]));
+    // Apply transform to all cells
+    const cT = pointsCells.map(cell => tf(cell[0], cell[1]));
+
+    // Find minimum row and column among stars
+    const minRow = Math.min(...sT.map(p => p[0]));
+    const minCol = Math.min(...sT.map(p => p[1]));
+
+    // Translate so minimum star is at origin
+    const shift = (p: Point): Point => [p[0] - minRow, p[1] - minCol];
+
+    const sN = sT.map(shift).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const cN = cT.map(shift).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+
+    // Create key for comparison
+    const key = JSON.stringify(sN);
+
+    // Keep lexicographically smallest
+    if (!bestStars || key < bestKey) {
+      bestStars = sN;
+      bestCells = cN;
+      bestTransformIndex = t;
+      bestTranslation = [minRow, minCol];
+      bestKey = key;
+    }
+  }
+
+  if (!bestStars) {
+    throw new Error('Failed to canonicalize stars');
+  }
+
+  return {
+    canonicalStars: bestStars,
+    canonicalCells: bestCells,
+    transformIndex: bestTransformIndex,
+    translation: bestTranslation,
+  };
+}
+
+/**
+ * Canonicalize a star pair using D4 symmetry (backward compatibility wrapper)
  */
 export function canonicalizeStars(initialStars: Point[]): CanonicalizationResult {
   if (initialStars.length !== 2) {
     throw new Error('canonicalizeStars expects exactly 2 stars');
   }
 
-  const [star1, star2] = initialStars;
-  let bestResult: CanonicalizationResult | null = null;
-  let bestKey: string = '';
-
-  // Try all 8 transforms
-  for (let i = 0; i < transforms.length; i++) {
-    const transform = transforms[i];
-    
-    // Apply transform to both stars
-    const [t1_row, t1_col] = transform(star1[0], star1[1]);
-    const [t2_row, t2_col] = transform(star2[0], star2[1]);
-    
-    // Find minimum row and column
-    const minRow = Math.min(t1_row, t2_row);
-    const minCol = Math.min(t1_col, t2_col);
-    
-    // Translate to origin
-    const p1: Point = [t1_row - minRow, t1_col - minCol];
-    const p2: Point = [t2_row - minRow, t2_col - minCol];
-    
-    // Sort lexicographically (by row then column)
-    let sortedPair: StarPair;
-    if (p1[0] < p2[0] || (p1[0] === p2[0] && p1[1] < p2[1])) {
-      sortedPair = [p1, p2];
-    } else {
-      sortedPair = [p2, p1];
-    }
-    
-    // Create a key for comparison
-    const key = JSON.stringify(sortedPair);
-    
-    // Keep the lexicographically smallest
-    if (bestResult === null || key < bestKey) {
-      bestResult = {
-        canonicalStars: sortedPair,
-        transformIndex: i,
-        translation: [minRow, minCol],
-      };
-      bestKey = key;
-    }
-  }
-
-  if (!bestResult) {
-    throw new Error('Failed to canonicalize stars');
-  }
-
-  return bestResult;
+  const result = canonicalize(initialStars, []);
+  return {
+    canonicalStars: [result.canonicalStars[0], result.canonicalStars[1]] as StarPair,
+    transformIndex: result.transformIndex,
+    translation: result.translation,
+  };
 }
 
 /**
@@ -146,21 +171,19 @@ export function extractPureEntanglements(
     // Convert initial_stars from Cell[] to Point[]
     const initialStars: Point[] = pattern.initial_stars.map(cell => [cell.row, cell.col]);
     
-    // Skip patterns that don't have exactly 2 stars (canonicalization requires pairs)
-    if (initialStars.length !== 2) {
+    // Skip patterns with no stars
+    if (initialStars.length === 0) {
       continue;
     }
     
     // Convert forced_empty from Cell[] to Point[]
     const forcedEmpty: Point[] = pattern.forced_empty.map(cell => [cell.row, cell.col]);
     
-    // Canonicalize stars
-    const { canonicalStars, transformIndex, translation } = canonicalizeStars(initialStars);
+    // Canonicalize stars and empties together using generic canonicalize
+    const { canonicalStars, canonicalCells, transformIndex, translation } = 
+      canonicalize(initialStars, forcedEmpty);
     const starKey = JSON.stringify(canonicalStars);
-    
-    // Canonicalize empties
-    const canonicalEmpties = canonicalizeEmpties(forcedEmpty, transformIndex, translation);
-    const emptiesKey = JSON.stringify(canonicalEmpties);
+    const emptiesKey = JSON.stringify(canonicalCells);
     
     // Update star class
     if (!starClasses.has(starKey)) {

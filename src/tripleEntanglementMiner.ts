@@ -1,12 +1,10 @@
 import { Pattern, Output, Cell, Grid } from './types';
-import { canonicalizeStars, canonicalizeEmpties, transforms, Point, CanonicalizationResult } from './pureEntanglementExtractor';
+import { canonicalize, transforms, Point } from './pureEntanglementExtractor';
 import { ConfigurationEnumerator } from './enumeration';
 import * as fs from 'fs';
 import * as path from 'path';
 
 // Type definitions
-type Triple = [Point, Point, Point]; // [star1, star2, candidate]
-
 interface TripleOccurrence {
   canonical_stars: Point[];
   canonical_candidate: Point;
@@ -17,15 +15,15 @@ interface TripleOccurrence {
 }
 
 interface TripleFeatureSet {
-  // Star position features (same as before)
-  star0_on_top_edge: boolean;
-  star0_on_bottom_edge: boolean;
-  star0_on_left_edge: boolean;
-  star0_on_right_edge: boolean;
-  star1_on_top_edge: boolean;
-  star1_on_bottom_edge: boolean;
-  star1_on_left_edge: boolean;
-  star1_on_right_edge: boolean;
+  // Star-based features (work for any Z)
+  anyStarOnTopEdge: boolean;
+  anyStarOnBottomEdge: boolean;
+  anyStarOnLeftEdge: boolean;
+  anyStarOnRightEdge: boolean;
+  allStarsInLeftHalf: boolean;
+  allStarsInRightHalf: boolean;
+  allStarsInTopHalf: boolean;
+  allStarsInBottomHalf: boolean;
   min_row_is_0: boolean;
   max_row_is_board_size_minus_1: boolean;
   min_col_is_0: boolean;
@@ -59,95 +57,75 @@ interface TripleEntanglementOutput {
 }
 
 /**
- * Canonicalize a triple (star pair + candidate cell) using D4 symmetry
+ * Canonicalize a triple (Z stars + candidate cell) using D4 symmetry
+ * Works with any number of stars
  */
 function canonicalizeTriple(
   stars: Point[],
   candidate: Point
 ): { canonicalStars: Point[]; canonicalCandidate: Point; transformIndex: number; translation: Point } {
-  if (stars.length !== 2) {
-    throw new Error('canonicalizeTriple expects exactly 2 stars');
+  if (stars.length === 0) {
+    throw new Error('canonicalizeTriple expects at least one star');
   }
 
-  const [star1, star2] = stars;
-  let bestResult: { canonicalStars: Point[]; canonicalCandidate: Point; transformIndex: number; translation: Point } | null = null;
-  let bestKey: string = '';
-
-  // Try all 8 transforms
-  for (let i = 0; i < transforms.length; i++) {
-    const transform = transforms[i];
-    
-    // Apply transform to both stars and candidate
-    const [t1_row, t1_col] = transform(star1[0], star1[1]);
-    const [t2_row, t2_col] = transform(star2[0], star2[1]);
-    const [tc_row, tc_col] = transform(candidate[0], candidate[1]);
-    
-    // Find minimum row and column among stars
-    const minRow = Math.min(t1_row, t2_row);
-    const minCol = Math.min(t1_col, t2_col);
-    
-    // Translate to origin
-    const p1: Point = [t1_row - minRow, t1_col - minCol];
-    const p2: Point = [t2_row - minRow, t2_col - minCol];
-    const pc: Point = [tc_row - minRow, tc_col - minCol];
-    
-    // Sort stars lexicographically
-    let sortedStars: Point[];
-    if (p1[0] < p2[0] || (p1[0] === p2[0] && p1[1] < p2[1])) {
-      sortedStars = [p1, p2];
-    } else {
-      sortedStars = [p2, p1];
-    }
-    
-    // Create a key for comparison
-    const key = JSON.stringify([sortedStars, pc]);
-    
-    // Keep the lexicographically smallest
-    if (bestResult === null || key < bestKey) {
-      bestResult = {
-        canonicalStars: sortedStars,
-        canonicalCandidate: pc,
-        transformIndex: i,
-        translation: [minRow, minCol],
-      };
-      bestKey = key;
-    }
+  // Use the generic canonicalize function, treating candidate as a cell
+  const result = canonicalize(stars, [candidate]);
+  
+  // Extract candidate from canonicalCells (should be single element)
+  if (result.canonicalCells.length !== 1) {
+    throw new Error('Expected exactly one candidate cell after canonicalization');
   }
 
-  if (!bestResult) {
-    throw new Error('Failed to canonicalize triple');
-  }
-
-  return bestResult;
+  return {
+    canonicalStars: result.canonicalStars,
+    canonicalCandidate: result.canonicalCells[0],
+    transformIndex: result.transformIndex,
+    translation: result.translation,
+  };
 }
 
 /**
- * Extract features from a triple occurrence
+ * Extract features from a triple occurrence (works for any Z stars)
  */
 function extractTripleFeatures(
   occurrence: TripleOccurrence,
   boardSize: number
 ): TripleFeatureSet {
-  const [star0, star1] = occurrence.abs_stars;
-  const [s0_row, s0_col] = star0;
-  const [s1_row, s1_col] = star1;
+  const stars = occurrence.abs_stars;
   const [c_row, c_col] = occurrence.abs_candidate;
   
-  const minRow = Math.min(s0_row, s1_row);
-  const maxRow = Math.max(s0_row, s1_row);
-  const minCol = Math.min(s0_col, s1_col);
-  const maxCol = Math.max(s0_col, s1_col);
+  if (stars.length === 0) {
+    throw new Error('extractTripleFeatures expects at least one star');
+  }
+  
+  const minRow = Math.min(...stars.map(([r]) => r));
+  const maxRow = Math.max(...stars.map(([r]) => r));
+  const minCol = Math.min(...stars.map(([, c]) => c));
+  const maxCol = Math.max(...stars.map(([, c]) => c));
+  
+  const halfSize = Math.floor(boardSize / 2);
+  
+  // Aggregate star features
+  const anyStarOnTopEdge = stars.some(([r]) => r === 0);
+  const anyStarOnBottomEdge = stars.some(([r]) => r === boardSize - 1);
+  const anyStarOnLeftEdge = stars.some(([, c]) => c === 0);
+  const anyStarOnRightEdge = stars.some(([, c]) => c === boardSize - 1);
+  
+  const allStarsInTopHalf = stars.every(([r]) => r < halfSize);
+  const allStarsInBottomHalf = stars.every(([r]) => r >= halfSize);
+  const allStarsInLeftHalf = stars.every(([, c]) => c < halfSize);
+  const allStarsInRightHalf = stars.every(([, c]) => c >= halfSize);
   
   return {
-    // Star position features
-    star0_on_top_edge: s0_row === 0,
-    star0_on_bottom_edge: s0_row === boardSize - 1,
-    star0_on_left_edge: s0_col === 0,
-    star0_on_right_edge: s0_col === boardSize - 1,
-    star1_on_top_edge: s1_row === 0,
-    star1_on_bottom_edge: s1_row === boardSize - 1,
-    star1_on_left_edge: s1_col === 0,
-    star1_on_right_edge: s1_col === boardSize - 1,
+    // Star-based features (work for any Z)
+    anyStarOnTopEdge,
+    anyStarOnBottomEdge,
+    anyStarOnLeftEdge,
+    anyStarOnRightEdge,
+    allStarsInLeftHalf,
+    allStarsInRightHalf,
+    allStarsInTopHalf,
+    allStarsInBottomHalf,
     min_row_is_0: minRow === 0,
     max_row_is_board_size_minus_1: maxRow === boardSize - 1,
     min_col_is_0: minCol === 0,
@@ -171,14 +149,14 @@ function extractTripleFeatures(
  */
 function getTripleFeatureNames(): string[] {
   return [
-    'star0_on_top_edge',
-    'star0_on_bottom_edge',
-    'star0_on_left_edge',
-    'star0_on_right_edge',
-    'star1_on_top_edge',
-    'star1_on_bottom_edge',
-    'star1_on_left_edge',
-    'star1_on_right_edge',
+    'anyStarOnTopEdge',
+    'anyStarOnBottomEdge',
+    'anyStarOnLeftEdge',
+    'anyStarOnRightEdge',
+    'allStarsInLeftHalf',
+    'allStarsInRightHalf',
+    'allStarsInTopHalf',
+    'allStarsInBottomHalf',
     'min_row_is_0',
     'max_row_is_board_size_minus_1',
     'min_col_is_0',
@@ -237,8 +215,8 @@ export function mineTripleEntanglements(
   
   // Step 1: Process all patterns and build triples
   for (const pattern of output.patterns) {
-    // Skip patterns that don't have exactly 2 stars
-    if (pattern.initial_stars.length !== 2) {
+    // Skip patterns with no stars
+    if (pattern.initial_stars.length === 0) {
       continue;
     }
     
@@ -250,7 +228,7 @@ export function mineTripleEntanglements(
       const candidate: Point = [emptyCell.row, emptyCell.col];
       
       // Canonicalize triple
-      const { canonicalStars, canonicalCandidate, transformIndex, translation } = canonicalizeTriple(initialStars, candidate);
+      const { canonicalStars, canonicalCandidate } = canonicalizeTriple(initialStars, candidate);
       
       // Check if candidate is forced empty (should be true since it's in forced_empty)
       const isForced = isCandidateForcedEmpty(pattern.initial_stars, emptyCell, solutions);
@@ -293,39 +271,49 @@ export function mineTripleEntanglements(
   // For each canonical triple, try all placements
   for (const [tripleKey, triple] of canonicalTriples.entries()) {
     const [canonStars, canonCandidate] = JSON.parse(tripleKey);
-    const [s0, s1] = canonStars;
     const [c0_row, c0_col] = canonCandidate;
     
     // Try all translations that fit on the board
     for (let baseRow = 0; baseRow < output.board_size; baseRow++) {
       for (let baseCol = 0; baseCol < output.board_size; baseCol++) {
-        // Calculate absolute positions
-        const absStar0: Point = [baseRow + s0[0], baseCol + s0[1]];
-        const absStar1: Point = [baseRow + s1[0], baseCol + s1[1]];
+        // Calculate absolute positions for all stars
+        const absStars: Point[] = canonStars.map((star: Point) => [baseRow + star[0], baseCol + star[1]]);
         const absCandidate: Point = [baseRow + c0_row, baseCol + c0_col];
         
-        // Check bounds
-        if (absStar0[0] < 0 || absStar0[0] >= output.board_size ||
-            absStar0[1] < 0 || absStar0[1] >= output.board_size ||
-            absStar1[0] < 0 || absStar1[0] >= output.board_size ||
-            absStar1[1] < 0 || absStar1[1] >= output.board_size ||
+        // Check bounds for all stars and candidate
+        let outOfBounds = false;
+        for (const star of absStars) {
+          if (star[0] < 0 || star[0] >= output.board_size ||
+              star[1] < 0 || star[1] >= output.board_size) {
+            outOfBounds = true;
+            break;
+          }
+        }
+        if (outOfBounds || 
             absCandidate[0] < 0 || absCandidate[0] >= output.board_size ||
             absCandidate[1] < 0 || absCandidate[1] >= output.board_size) {
           continue;
         }
         
-        // Check adjacency (stars can't be adjacent)
-        const rowDiff = Math.abs(absStar0[0] - absStar1[0]);
-        const colDiff = Math.abs(absStar0[1] - absStar1[1]);
-        if (rowDiff <= 1 && colDiff <= 1) {
+        // Check adjacency (stars can't be adjacent to each other)
+        let hasAdjacentStars = false;
+        for (let i = 0; i < absStars.length; i++) {
+          for (let j = i + 1; j < absStars.length; j++) {
+            const rowDiff = Math.abs(absStars[i][0] - absStars[j][0]);
+            const colDiff = Math.abs(absStars[i][1] - absStars[j][1]);
+            if (rowDiff <= 1 && colDiff <= 1) {
+              hasAdjacentStars = true;
+              break;
+            }
+          }
+          if (hasAdjacentStars) break;
+        }
+        if (hasAdjacentStars) {
           continue; // Stars are adjacent, invalid
         }
         
         // Convert to Cell format
-        const starCells: Cell[] = [
-          { row: absStar0[0], col: absStar0[1] },
-          { row: absStar1[0], col: absStar1[1] },
-        ];
+        const starCells: Cell[] = absStars.map(([r, c]) => ({ row: r, col: c }));
         const candidateCell: Cell = { row: absCandidate[0], col: absCandidate[1] };
         
         // Check if this pattern is compatible with any solution
@@ -338,7 +326,7 @@ export function mineTripleEntanglements(
         }
         
         // Check if we've already seen this placement
-        const placementKey = JSON.stringify([tripleKey, [absStar0, absStar1], absCandidate]);
+        const placementKey = JSON.stringify([tripleKey, absStars, absCandidate]);
         if (seenPlacements.has(placementKey)) {
           continue; // Already processed from patterns
         }
@@ -351,7 +339,7 @@ export function mineTripleEntanglements(
         const occurrence: TripleOccurrence = {
           canonical_stars: canonStars,
           canonical_candidate: canonCandidate,
-          abs_stars: [absStar0, absStar1],
+          abs_stars: absStars,
           abs_candidate: absCandidate,
           is_forced: isForced,
           extra_features: {} as TripleFeatureSet,
